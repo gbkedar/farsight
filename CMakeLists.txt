@@ -94,6 +94,10 @@ if( BUILD_NUCLEI )
   if( NOT BUILD_ACTIVEVALIDATION )
     message(FATAL_ERROR "NucleusEditor requries ActiveValidation. Turn on BUILD_ACTIVEVALIDATION")	
   endif()
+  OPTION( BUILD_PROJPROC_WITH_MONT_SEG "Build Project Processor With Montage Segmentation" OFF )
+  if( BUILD_PROJPROC_WITH_MONT_SEG )
+    add_definitions( -DPROJPROC_WITH_MONT_SEG )
+  endif()
 endif()
 
 
@@ -219,7 +223,23 @@ else(QT4_FOUND)
 endif(QT4_FOUND)
 
 # Find Boost
-find_package(Boost)
+if( BUILD_PROJPROC_WITH_MONT_SEG )
+  set(Boost_USE_STATIC_LIBS ON)
+  set(Boost_USE_MULTITHREADED ON)
+  set(Boost_DEBUG true )
+  set(Boost_DETAILED_FAILURE_MSG true )
+  set(Boost_DEBUG true )
+  option( BOOST_NOT_IN_SYS_PATH "Boost libraries are not in the system path" OFF )
+  IF( BOOST_NOT_IN_SYS_PATH )
+    set(Boost_NO_BOOST_CMAKE true)
+    set(Boost_NO_SYSTEM_PATHS true )
+  ENDIF()
+  message( "Looking for compiled Boost libs" )
+  find_package(Boost COMPONENTS filesystem system)
+  message( "Using boost libraries: ${Boost_LIBRARIES}" )
+else()
+  find_package(Boost)
+endif()
 include_directories ( ${Boost_INCLUDE_DIRS})
 
 #####################################################################################
@@ -364,8 +384,9 @@ set( common_libraries
   ftkSpectralUnmixing
   ftkGUI
   ftkGraphs
-  tinyxml
+  IlluminationCorrection
   PatternAnalysis
+  tinyxml
   )
 foreach( _lib ${common_libraries} )
   include_directories( ${PROJECT_SOURCE_DIR}/${_lib} )
