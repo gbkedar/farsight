@@ -14,7 +14,7 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
-#define DEBUG_GenerateRegistrationPairs
+//#define DEBUG_GenerateRegistrationPairs
 
 #include <tinyxml/tinyxml.h>
 
@@ -257,7 +257,7 @@ std::string CheckWritePermissionsNCreateTempFolder()
   return temp_dir_str;
 }
 
-void GetTile( US2ImageType::Pointer currentTile, US3ImageType::Pointer readImage, unsigned i )
+void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, unsigned i )
 {
   typedef itk::ExtractImageFilter< US3ImageType, US2ImageType > DataExtractType;
   DataExtractType::Pointer deFilter = DataExtractType::New();
@@ -280,7 +280,7 @@ void GetTile( US2ImageType::Pointer currentTile, US3ImageType::Pointer readImage
   currentTile->Register();
 }
 
-void RescaleNCastTile( US2ImageType::Pointer currentTile, UC2ImageType::Pointer currentTileUC2 )
+void RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2 )
 {
   typedef itk::RescaleIntensityImageFilter< US2ImageType, UC2ImageType > RescaleUS2UCType;
   RescaleUS2UCType::Pointer rescaleUS2UC = RescaleUS2UCType::New();
@@ -311,7 +311,7 @@ std::string GenerateFileNameString( std::string tempFolder, std::string template
 }
 
 template <typename ImageType>
-void WriteChannel( std::string &fileName, typename ImageType::Pointer writeFile )
+void WriteChannel( std::string &fileName, typename ImageType::Pointer &writeFile )
 {
   typedef typename itk::ImageFileWriter< ImageType > WriterType;
   typename WriterType::Pointer writer = WriterType::New();
@@ -338,9 +338,10 @@ void CreateTempFolderNWriteInputChannelTiles
   ReaderType::Pointer reader = ReaderType::New();
   reader = ReaderType::New();
   reader->SetFileName( inputImage );
+  reader->SetUseStreaming( true );
   try
   {
-    reader->Update();
+    reader->UpdateOutputInformation();//Update();
   }
   catch (itk::ExceptionObject &e)
   {
@@ -362,27 +363,40 @@ void CreateTempFolderNWriteInputChannelTiles
   }
 
   tempFolder = CheckWritePermissionsNCreateTempFolder();
+  std::string templateNameUC = templateName + "_UC";
 
   for( unsigned i=0; i<tilesInfo.size(); ++i )
     for( unsigned j=0; j<tilesInfo.at(i).sizeC; ++j )
     {
       //Write each tile for transofrmation and stitching
-      US2ImageType::Pointer currentTile = US2ImageType::New();
+      US2ImageType::Pointer currentTile;
       GetTile( currentTile, readImage, (i*tilesInfo.at(0).sizeC+j) );
-      std::string fileName = GenerateFileNameString( tempFolder, templateName, i, j ) + ".tif";
+      std::string fileName = GenerateFileNameString( tempFolder, templateName, j, i ) + ".tif";
       WriteChannel< US2ImageType >( fileName, currentTile );
       //Write 8-bit images for register pair
       if( j==registrationChannel )
       {
-        UC2ImageType::Pointer currentTileUC2 = UC2ImageType::New();
+        UC2ImageType::Pointer currentTileUC2;
 	RescaleNCastTile( currentTile, currentTileUC2 );
-	fileName = GenerateFileNameString( tempFolder, templateName, i, j ) + "_UC.tif";
+	fileName = GenerateFileNameString( tempFolder, templateNameUC, j, i ) + ".tif";
 	registerPairFileNames.push_back( fileName );
 	WriteChannel< UC2ImageType >( fileName, currentTileUC2 );
 	currentTileUC2->UnRegister();
       }
       currentTile->UnRegister();
     }
+}
+
+void WritePairsFile( std::vector< std::string > &registerPairFileNames,
+	std::vector< std::pair< unsigned, unsigned > > &registrationPairs, std::string &registrationFile )
+{
+  std::ofstream ofs(registrationFile.c_str(), std::ofstream::out);
+  for( unsigned i=0; i<registrationPairs.size(); ++i )
+  {
+    ofs << registerPairFileNames.at(registrationPairs.at(i).first)
+    	<< "\t" << registerPairFileNames.at(registrationPairs.at(i).second) << "\n";
+  }
+  ofs.close();
 }
 
 int main(int argc, char *argv[])
@@ -395,13 +409,14 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
 
-  std::string myName	     = argv[0];	//Just In case..
-  std::string inputImage     = argv[1];	//Name of the input image
-  std::string inputXml       = argv[2]; //Name of the xml file with the metadata
-  std::string outputTemplate = argv[3];	//Name of the label image to apply
-  int numChannel = 0;			//Number of the channel to be used to run registration
-  if( argc == 5 )
-    numChannel = atoi(argv[4]);
+  std::string myName	       = argv[0]; //Just In case..
+  std::string inputImage       = argv[1]; //Name of the input image
+  std::string inputXml         = argv[2]; //Name of the xml file with the metadata
+  std::string outputTemplate   = argv[3]; //Template filename for the tiles
+  std::string registrationFile = argv[4]; //Registration filename
+  int numChannel = 0;			  //Number of the channel to be used to run registration
+  if( argc == 6 )
+    numChannel = atoi(argv[5]);
 
   //Read the xml file and get number of files
   unsigned numberOfFiles = GetNumberOfFilesFromXML( inputXml );
@@ -413,16 +428,18 @@ int main(int argc, char *argv[])
 
   std::vector< std::pair< unsigned, unsigned > > registrationPairs;
   GenerateRegistrationPairs( tilesInfo, registrationPairs );
-
-  std::vector< std::string > registerPairFileNames;
-  std::string tempFolder;
-  CreateTempFolderNWriteInputChannelTiles( inputImage, tilesInfo, registerPairFileNames, tempFolder,
-	outputTemplate, numChannel );
-
   if( registrationPairs.empty() )
   {
     std::cout<<"Found no overlapping tiles in the metadata\n";
     return EXIT_FAILURE;
   }
+
+  std::vector< std::string > registerPairFileNames;
+  std::string tempFolder;
+  CreateTempFolderNWriteInputChannelTiles( inputImage, tilesInfo, registerPairFileNames, tempFolder,
+	outputTemplate, numChannel );
+  registrationFile = tempFolder + registrationFile;
+  WritePairsFile( registerPairFileNames, registrationPairs, registrationFile ); 
+
   return EXIT_SUCCESS;
 }
