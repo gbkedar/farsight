@@ -1,7 +1,3 @@
-PROJECT(PowerOf2Tiling)
-
-#INCLUDE_DIRECTORIES()
-
 SET(PowerOf2Tiling_HDRS 
 )
 

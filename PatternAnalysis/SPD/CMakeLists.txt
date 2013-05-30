@@ -6,7 +6,8 @@ SET( Libraries
     mbl
     ${QT_LIBRARIES})
 
-QT4_WRAP_CPP( GUI_MOC_SRCS SPDMSTModuleMatch.h SPDkNNGModuleMatch.h HeatmapWindow.h HeatmapWindowForNewSelection.h ProgressionHeatmapWindow.h)
+QT4_WRAP_CPP( GUI_MOC_SRCS SPDMSTModuleMatch.h SPDkNNGModuleMatch.h HeatmapWindow.h HeatmapWindowForNewSelection.h ProgressionHeatmapWindow.h
+		OPTIONS -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION )
 
 SET(SPD_SRCS
 	SPDAnalysisModel.h

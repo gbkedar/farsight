@@ -116,13 +116,15 @@ ENDIF()
 
 # this command will generate rules that will run rcc on all files from SAMPLE_RCS
 # in result SAMPLE_RC_SRCS variable will contain paths to files produced by rcc
-QT4_ADD_RESOURCES( NucleusEditor_RC_SRCS ${NucleusEditor_RCS} )
+QT4_ADD_RESOURCES( NucleusEditor_RC_SRCS ${NucleusEditor_RCS}) 
 
 # this will run uic on .ui files:
-QT4_WRAP_UI( NucleusEditor_UI_HDRS ${NucleusEditor_UIS} )
+QT4_WRAP_UI( NucleusEditor_UI_HDRS ${NucleusEditor_UIS} 
+  OPTIONS -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION )
 
 # and finally this will run moc:
-QT4_WRAP_CPP( NucleusEditor_MOC_SRCS ${NucleusEditor_MOC_REQD_HDRS} )
+QT4_WRAP_CPP( NucleusEditor_MOC_SRCS ${NucleusEditor_MOC_REQD_HDRS}
+  OPTIONS -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION )
 
 SET (NUCLEUSEDITOR_SOURCES
   main.cpp

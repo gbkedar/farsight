@@ -7,7 +7,8 @@ SET(ActiveValidation_HDRS
   ActiveValidation.h
   ActiveValidationWizard.h
 )
-QT4_WRAP_CPP( ActiveValidation_MOC_REQD_HDRS ActiveValidationWizard.h)
+QT4_WRAP_CPP( ActiveValidation_MOC_REQD_HDRS ActiveValidationWizard.h
+		OPTIONS -DBOOST_TT_HAS_OPERATOR_HPP_INCLUDED -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION )
 
 ADD_LIBRARY(libActiveValidation ${ActiveValidation_SRCS} ${ActiveValidation_HDRS} ${ActiveValidation_MOC_REQD_HDRS})
 ADD_EXECUTABLE(ActiveValidation Active_Validation_main.cpp )

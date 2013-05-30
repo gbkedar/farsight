@@ -29,7 +29,8 @@ SET( ClusClus_HDRS
 	LocalGeometryRef.h)
 	
 INCLUDE_DIRECTORIES ( ${Boost_INCLUDE_DIRS})
-QT4_WRAP_CPP( ClusClus_MOC_REQD_HDRS HeatmapWindow.h Dendrogram.h clusclusMainwindow.h Heatmap.h)  
+QT4_WRAP_CPP( ClusClus_MOC_REQD_HDRS HeatmapWindow.h Dendrogram.h clusclusMainwindow.h Heatmap.h
+		OPTIONS -DBOOST_TT_HAS_OPERATOR_HPP_INCLUDED -DBOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION ) 
 
 ADD_LIBRARY( ClusClus_lib ${ClusClus_SRCS} ${ClusClus_HDRS} ${ClusClus_MOC_REQD_HDRS} )
 
