@@ -28,12 +28,19 @@
 #include "boost/filesystem/operations.hpp"
 #include "boost/lexical_cast.hpp"
 
-#include "itkSCIFIOImageIO.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
 #include "itkImage.h"
-#include "itkMetaDataObject.h"
-#include "itkStreamingImageFilter.h"
+#include "itkExtractImageFilter.h"
+#include "itkRescaleIntensityImageFilter.h"
+
+typedef unsigned short USPixelType;
+typedef unsigned short UCPixelType;
+const unsigned int     Dimension3 = 3;
+const unsigned int     Dimension2 = 2;
+typedef itk::Image< USPixelType, Dimension3 > US3ImageType;
+typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
+typedef itk::Image< UCPixelType, Dimension2 > UC2ImageType;
 
 void usage( const char *funcName )
 {
@@ -250,49 +257,131 @@ std::string CheckWritePermissionsNCreateTempFolder()
   return temp_dir_str;
 }
 
-void CreateTempFolderNWriteInputChannelTiles( std::string inputImage, std::vector< TileInfo > &tilesInfo,
-	std::vector< std::string > &registerPairFileNames )
+void GetTile( US2ImageType::Pointer currentTile, US3ImageType::Pointer readImage, unsigned i )
 {
-  std::string tempFolder = CheckWritePermissionsNCreateTempFolder();
-  typedef unsigned short       PixelType;
-  const unsigned int           Dimension = 3;
+  typedef itk::ExtractImageFilter< US3ImageType, US2ImageType > DataExtractType;
+  DataExtractType::Pointer deFilter = DataExtractType::New();
+  US3ImageType::RegionType dRegion  = readImage->GetLargestPossibleRegion();
+  dRegion.SetSize (2,0);
+  dRegion.SetIndex(2,i);
+  deFilter->SetExtractionRegion(dRegion);
+  deFilter->SetDirectionCollapseToIdentity();
+  deFilter->SetInput( readImage );
+  try
+  {
+    deFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught !" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  currentTile = deFilter->GetOutput();
+  currentTile->Register();
+}
 
-  typedef itk::Image< PixelType, Dimension >   ImageType;
-  typedef itk::ImageFileReader< ImageType >    ReaderType;
+void RescaleNCastTile( US2ImageType::Pointer currentTile, UC2ImageType::Pointer currentTileUC2 )
+{
+  typedef itk::RescaleIntensityImageFilter< US2ImageType, UC2ImageType > RescaleUS2UCType;
+  RescaleUS2UCType::Pointer rescaleUS2UC = RescaleUS2UCType::New();
+  rescaleUS2UC->SetOutputMaximum( UCHAR_MAX );
+  rescaleUS2UC->SetOutputMinimum( 0 );
+  rescaleUS2UC->SetInput( currentTile );
+  try
+  {
+    rescaleUS2UC->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught !" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  currentTileUC2 = rescaleUS2UC->GetOutput();
+  currentTileUC2->Register();
+}
 
-  itk::SCIFIOImageIO::Pointer io = itk::SCIFIOImageIO::New();
+std::string GenerateFileNameString( std::string tempFolder, std::string templateName, unsigned i, unsigned j )
+{
+  std::string outString;
+  std::string OutFile;
+  std::stringstream filess;
+  filess << i << "_" << j;
+  outString = tempFolder + templateName + "_" +  filess.str();
+  return outString;
+}
+
+template <typename ImageType>
+void WriteChannel( std::string &fileName, typename ImageType::Pointer writeFile )
+{
+  typedef typename itk::ImageFileWriter< ImageType > WriterType;
+  typename WriterType::Pointer writer = WriterType::New();
+  writer->SetFileName( fileName.c_str() );
+  writer->SetInput( writeFile );
+  try
+  {
+    writer->Update();
+  }
+  catch (itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+}
+
+void CreateTempFolderNWriteInputChannelTiles
+	( std::string inputImage, std::vector< TileInfo > &tilesInfo,
+	  std::vector< std::string > &registerPairFileNames, std::string &tempFolder,
+	  std::string &templateName, unsigned registrationChannel
+	)
+{
+  typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   ReaderType::Pointer reader = ReaderType::New();
+  reader = ReaderType::New();
+  reader->SetFileName( inputImage );
+  try
+  {
+    reader->Update();
+  }
+  catch (itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  US3ImageType::Pointer    readImage = reader->GetOutput();
+  US3ImageType::RegionType regionUS3 = readImage->GetLargestPossibleRegion();
+  US3ImageType::SizeType     sizeUS3 = regionUS3.GetSize();
 
 #ifdef DEBUG_GenerateRegistrationPairs
-  std::cout << "reader->GetUseStreaming(): " << reader->GetUseStreaming() << std::endl;
-  std::cout << "done checking streaming usage";
-#endif //DEBUG_GenerateRegistrationPairs
+  std::cout<<sizeUS3<<std::endl;
+#endif
 
-  reader->SetImageIO(io);
-  reader->SetFileName( inputImage );
+  if( sizeUS3[2] != tilesInfo.at(0).sizeC*tilesInfo.size() )
+  {
+    std::cout<<"Metadata size and image size do not match\n";
+    exit( EXIT_FAILURE );
+  }
 
-  typedef itk::StreamingImageFilter<ImageType, ImageType> StreamingFilter;
-  StreamingFilter::Pointer streamer = StreamingFilter::New();
-  streamer->SetInput( reader->GetOutput() );
-  streamer->SetNumberOfStreamDivisions( 10 );
+  tempFolder = CheckWritePermissionsNCreateTempFolder();
 
-  typedef itk::ImageFileWriter< ImageType > WriterType;
-  WriterType::Pointer writer;
-  //
-  // Use the generic writers to write the image.
-  //
-  writer = WriterType::New();
-  writer->SetInput( streamer->GetOutput() );
-  writer->SetFileName( "test.nrrd" );
-
-  try
+  for( unsigned i=0; i<tilesInfo.size(); ++i )
+    for( unsigned j=0; j<tilesInfo.at(i).sizeC; ++j )
     {
-    writer->Update();
-    }
-  catch (itk::ExceptionObject &e)
-    {
-    std::cerr << e << std::endl;
-    return EXIT_FAILURE;
+      //Write each tile for transofrmation and stitching
+      US2ImageType::Pointer currentTile = US2ImageType::New();
+      GetTile( currentTile, readImage, (i*tilesInfo.at(0).sizeC+j) );
+      std::string fileName = GenerateFileNameString( tempFolder, templateName, i, j ) + ".tif";
+      WriteChannel< US2ImageType >( fileName, currentTile );
+      //Write 8-bit images for register pair
+      if( j==registrationChannel )
+      {
+        UC2ImageType::Pointer currentTileUC2 = UC2ImageType::New();
+	RescaleNCastTile( currentTile, currentTileUC2 );
+	fileName = GenerateFileNameString( tempFolder, templateName, i, j ) + "_UC.tif";
+	registerPairFileNames.push_back( fileName );
+	WriteChannel< UC2ImageType >( fileName, currentTileUC2 );
+	currentTileUC2->UnRegister();
+      }
+      currentTile->UnRegister();
     }
 }
 
@@ -326,7 +415,9 @@ int main(int argc, char *argv[])
   GenerateRegistrationPairs( tilesInfo, registrationPairs );
 
   std::vector< std::string > registerPairFileNames;
-  CreateTempFolderNWriteInputChannelTiles( inputImage, tilesInfo, registerPairFileNames );
+  std::string tempFolder;
+  CreateTempFolderNWriteInputChannelTiles( inputImage, tilesInfo, registerPairFileNames, tempFolder,
+	outputTemplate, numChannel );
 
   if( registrationPairs.empty() )
   {
