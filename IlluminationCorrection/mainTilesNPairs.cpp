@@ -217,7 +217,7 @@ void GenerateRegistrationPairs( std::vector< TileInfo > &tilesInfo,
 #ifdef DEBUG_GenerateRegistrationPairs
   for( unsigned i=0; i<registrationPairs.size(); ++i )
   {
-    std::cout << registrationPairs.at(i).first << "\t" << registrationPairs.at(i).second << "\n";
+    std::cout << registrationPairs.at(i).first << " " << registrationPairs.at(i).second << "\n";
   }
 #endif //DEBUG_GenerateRegistrationPairs
 }
@@ -376,7 +376,10 @@ void CreateTempFolderNWriteInputChannelTiles
       //Write 8-bit images for register pair
       if( j==registrationChannel )
       {
-        UC2ImageType::Pointer currentTileUC2;
+#ifdef DEBUG_GenerateRegistrationPairs
+	std::cout<<(i*tilesInfo.at(0).sizeC+j)<<"\t";
+#endif
+	UC2ImageType::Pointer currentTileUC2;
 	RescaleNCastTile( currentTile, currentTileUC2 );
 	fileName = GenerateFileNameString( tempFolder, templateNameUC, j, i ) + ".tif";
 	registerPairFileNames.push_back( fileName );
@@ -385,6 +388,9 @@ void CreateTempFolderNWriteInputChannelTiles
       }
       currentTile->UnRegister();
     }
+#ifdef DEBUG_GenerateRegistrationPairs
+    std::cout<<std::endl;
+#endif
 }
 
 void WritePairsFile( std::vector< std::string > &registerPairFileNames,
