@@ -299,12 +299,13 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   currentTile->Register();
 }
 
-void RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2 )
+void RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2,
+			unsigned short scaleLower, unsigned short scaleHigher )
 {
   typedef itk::RescaleIntensityImageFilter< US2ImageType, UC2ImageType > RescaleUS2UCType;
   RescaleUS2UCType::Pointer rescaleUS2UC = RescaleUS2UCType::New();
-  rescaleUS2UC->SetOutputMaximum( UCHAR_MAX );
-  rescaleUS2UC->SetOutputMinimum( 0 );
+  rescaleUS2UC->SetOutputMaximum( scaleHigher );
+  rescaleUS2UC->SetOutputMinimum( scaleLower );
   rescaleUS2UC->SetInput( currentTile );
   try
   {
@@ -347,6 +348,14 @@ void WriteChannel( std::string &fileName, typename ImageType::Pointer &writeFile
   }
 }
 
+void ComputeScalingConstsFromTileZero( US2ImageType::Pointer &tileZero, unsigned short &scaleLower,
+					unsigned short &scaleHigher )
+{
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  typedef itk::Statistics::Histogram< float > HistogramType;
+  ;
+}
+
 void CreateTempFolderNWriteInputChannelTiles
 	( std::string inputImage, std::vector< TileInfo > &tilesInfo,
 	  std::vector< std::string > &registerPairFileNames, std::string &tempFolder,
@@ -387,6 +396,10 @@ void CreateTempFolderNWriteInputChannelTiles
   tempFolder = CheckWritePermissionsNCreateTempFolder();
   std::string templateNameUC = templateName + "_UC";
 
+  unsigned short scaleLower, scaleHigher;
+  US2ImageType::Pointer tileZero;
+  GetTile( tileZero, readImage, registrationChannel );
+  ComputeScalingConstsFromTileZero( tileZero, scaleLower, scaleHigher );
   for( unsigned i=0; i<tilesInfo.size(); ++i )
     for( unsigned j=0; j<tilesInfo.at(i).sizeC; ++j )
     {
@@ -402,7 +415,7 @@ void CreateTempFolderNWriteInputChannelTiles
 	std::cout<<(i*tilesInfo.at(0).sizeC+j)<<"\t";
 #endif
 	UC2ImageType::Pointer currentTileUC2;
-	RescaleNCastTile( currentTile, currentTileUC2 );
+	RescaleNCastTile( currentTile, currentTileUC2, scaleLower, scaleHigher );
 	fileName = GenerateFileNameString( tempFolder, templateNameUC, j, i ) + ".tif";
 	registerPairFileNames.push_back( fileName );
 	WriteChannel< UC2ImageType >( fileName, currentTileUC2 );
