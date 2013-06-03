@@ -421,15 +421,18 @@ void WritePairsFile( std::vector< std::string > &registerPairFileNames,
   std::ofstream ofs(registrationFile.c_str(), std::ofstream::out);
   for( unsigned i=0; i<registrationPairs.size(); ++i )
   {
-    ofs << registerPairFileNames.at(registrationPairs.at(i).first)
-    	<< "\t" << registerPairFileNames.at(registrationPairs.at(i).second) << "\n";
+    size_t findPath1, findPath2;
+    findPath1 = registerPairFileNames.at(registrationPairs.at(i).first).find_last_of("/\\");
+    findPath2 = registerPairFileNames.at(registrationPairs.at(i).second).find_last_of("/\\");
+    ofs << registerPairFileNames.at(registrationPairs.at(i).first).substr(findPath1+1)
+    	<< " " << registerPairFileNames.at(registrationPairs.at(i).second).substr(findPath2+1) << "\n";
   }
   ofs.close();
 }
 
 int main(int argc, char *argv[])
 { 
-  if( argc < 5 || argc < 7 )
+  if( argc < 5 || argc > 7 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
