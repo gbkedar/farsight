@@ -377,7 +377,10 @@ void CreateTempFolderNWriteInputChannelTiles
 
   if( sizeUS3[2] != tilesInfo.at(0).sizeC*tilesInfo.size() )
   {
-    std::cout<<"Metadata size and image size do not match\n";
+    std::cout<< "Metadata size "
+	     << tilesInfo.at(0).sizeC*tilesInfo.size()
+	     << " and image size " << sizeUS3[2]
+	     << " do not match\n";
     exit( EXIT_FAILURE );
   }
 
@@ -426,7 +429,7 @@ void WritePairsFile( std::vector< std::string > &registerPairFileNames,
 
 int main(int argc, char *argv[])
 { 
-  if( argc < 5 )
+  if( argc < 5 || argc < 7 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
