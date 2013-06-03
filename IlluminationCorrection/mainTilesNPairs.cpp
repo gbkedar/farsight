@@ -44,9 +44,10 @@ typedef itk::Image< UCPixelType, Dimension2 > UC2ImageType;
 
 void usage( const char *funcName )
 {
-  std::cout << "USAGE:";
-  std::cout << " " << funcName << " InputImage InputMetadataXML "
-	    << "OutputTemplate <PairList>.txt NumChannelForRegistration\n";
+  std::cout << "USAGE:"
+	    << " " << funcName << " InputImage InputMetadataXML "
+	    << "OutputTemplate <PairList>.txt NumChannelForRegistration(default 0)"
+	    << " No_Ignore_Diagonal_Pairs(1 or 0-default 0)\n";
   std::cout << "First three inputs are filenames\n";
 }
 
@@ -159,8 +160,25 @@ void GetTileInfo( std::vector< TileInfo > &tilesInfo,
   return;
 }
 
-bool CheckOverlap( std::vector< TileInfo > &tilesInfo, unsigned i, unsigned j )
+bool CheckOverlap( std::vector< TileInfo > &tilesInfo, unsigned i, unsigned j, bool ignoreDiagonals )
 {
+  //A diagonal match is one whose center is greater than +/- 20% of the size of the tile in x&y
+  if( !ignoreDiagonals )
+  {
+    double twentyPcX = tilesInfo.at(i).sizeX*tilesInfo.at(i).physicalSizeX*0.2;
+    double twentyPcY = tilesInfo.at(i).sizeY*tilesInfo.at(i).physicalSizeY*0.2;
+    if( std::abs( tilesInfo.at(i).positionX-tilesInfo.at(j).positionX ) > twentyPcX &&
+	std::abs( tilesInfo.at(i).positionY-tilesInfo.at(j).positionY ) > twentyPcY )
+    {
+#ifdef DEBUG_GenerateRegistrationPairs
+//      std::cout << "Skipping tiles X1:"<< tilesInfo.at(i).positionX << "\tX2:"
+//		<< tilesInfo.at(j).positionX << "\tY1:" << tilesInfo.at(i).positionY << "\tY2:"
+//		<< tilesInfo.at(j).positionY <<"\n";
+#endif //DEBUG_GenerateRegistrationPairs
+      return false;
+    }
+  }
+
   double iTileCornerX[4], jTileCornerX[4], iTileCornerY[4], jTileCornerY[4];
   for( unsigned k=0; k<4; ++k )
   {
@@ -185,8 +203,8 @@ bool CheckOverlap( std::vector< TileInfo > &tilesInfo, unsigned i, unsigned j )
       jTileCornerY[k] = tilesInfo.at(j).positionY + ((double)tilesInfo.at(j).sizeY)/2 * tilesInfo.at(j).physicalSizeY;
     }
   }
-  //Compare each point in j to the bounds of i
 
+  //Compare each point in j to the bounds of i
   for( unsigned k=0; k<4; ++k )
   {
     if( ( jTileCornerX[k] >= iTileCornerX[0] ) && ( jTileCornerX[k] <= iTileCornerX[2] ) &&
@@ -197,16 +215,17 @@ bool CheckOverlap( std::vector< TileInfo > &tilesInfo, unsigned i, unsigned j )
 }
 
 void GenerateRegistrationPairs( std::vector< TileInfo > &tilesInfo,
-				std::vector< std::pair< unsigned, unsigned > > &registrationPairs )
+				std::vector< std::pair< unsigned, unsigned > > &registrationPairs,
+				bool ignoreDiagonals )
 {
   //Assume PositionX n PositionY are in the middle of each tile and that they are rectangles
   for( unsigned i=0; i<(tilesInfo.size()-1); ++i )
   {
     for( unsigned j=i+1; j<tilesInfo.size(); ++j )
     {
-      bool overLap = CheckOverlap( tilesInfo, i, j );
+      bool overLap = CheckOverlap( tilesInfo, i, j, ignoreDiagonals );
       if( !overLap )
-	overLap = CheckOverlap( tilesInfo, j, i ); //One may be contained entirely/partially in the other
+	overLap = CheckOverlap( tilesInfo, j, i, ignoreDiagonals ); //One may be contained entirely/partially in the other
       if( overLap )
       {
 	std::pair <int,int> registerPair = std::make_pair( i, j );
@@ -407,7 +426,7 @@ void WritePairsFile( std::vector< std::string > &registerPairFileNames,
 
 int main(int argc, char *argv[])
 { 
-  if( argc < 4 )
+  if( argc < 5 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
@@ -421,8 +440,11 @@ int main(int argc, char *argv[])
   std::string outputTemplate   = argv[3]; //Template filename for the tiles
   std::string registrationFile = argv[4]; //Registration filename
   int numChannel = 0;			  //Number of the channel to be used to run registration
+  bool noIgnoreDiagonal = false;	  //Don't write diagonal pairs to registration
   if( argc == 6 )
     numChannel = atoi(argv[5]);
+  if( argc == 7 && atoi(argv[6]) == 1 )
+    noIgnoreDiagonal = true;
 
   //Read the xml file and get number of files
   unsigned numberOfFiles = GetNumberOfFilesFromXML( inputXml );
@@ -433,7 +455,7 @@ int main(int argc, char *argv[])
   GetTileInfo( tilesInfo, inputXml );
 
   std::vector< std::pair< unsigned, unsigned > > registrationPairs;
-  GenerateRegistrationPairs( tilesInfo, registrationPairs );
+  GenerateRegistrationPairs( tilesInfo, registrationPairs, noIgnoreDiagonal );
   if( registrationPairs.empty() )
   {
     std::cout<<"Found no overlapping tiles in the metadata\n";
