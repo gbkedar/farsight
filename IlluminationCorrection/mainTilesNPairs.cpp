@@ -320,14 +320,14 @@ bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer
     std::cerr << "Exception caught !" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
-  //Give warning if over/underflow too high
-  double size = currentTile->GetLargestPossibleRegion().GetSize()[0] *
-  		currentTile->GetLargestPossibleRegion().GetSize()[1];
-  double overUnderFlowThresh = 0.1*size;
   currentTileUC2 = shiftRescaleUS2UC->GetOutput();
   currentTileUC2->Register();
 
 #ifdef DEBUG_GenerateRegistrationPairs
+  //Give warning if over/underflow too high
+  double size = currentTile->GetLargestPossibleRegion().GetSize()[0] *
+  		currentTile->GetLargestPossibleRegion().GetSize()[1];
+  double overUnderFlowThresh = 0.1*size;
   if( shiftRescaleUS2UC->GetUnderflowCount()>overUnderFlowThresh ||
       shiftRescaleUS2UC->GetOverflowCount()>overUnderFlowThresh )
   {
