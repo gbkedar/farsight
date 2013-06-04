@@ -37,7 +37,7 @@
 #include "itkShiftScaleImageFilter.h"
 
 typedef unsigned short USPixelType;
-typedef unsigned short UCPixelType;
+typedef unsigned char  UCPixelType;
 const unsigned int     Dimension3 = 3;
 const unsigned int     Dimension2 = 2;
 typedef itk::Image< USPixelType, Dimension3 > US3ImageType;
@@ -305,9 +305,10 @@ bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer
 	US2ImageType::PixelType scaleLower, US2ImageType::PixelType scaleHigher )
 {
   typedef itk::ShiftScaleImageFilter< US2ImageType, UC2ImageType > ShiftRescaleUS2UCType;
-  double scaling = itk::NumericTraits<UC2ImageType::PixelType>::max()/(scaleHigher-scaleLower);
+  double scaling = ((double)itk::NumericTraits< UC2ImageType::PixelType >::max())
+  			/ ((double)(scaleHigher-scaleLower));
   ShiftRescaleUS2UCType::Pointer shiftRescaleUS2UC = ShiftRescaleUS2UCType::New();
-  shiftRescaleUS2UC->SetShift( scaleLower );
+  shiftRescaleUS2UC->SetShift( -1.0*((double)scaleLower) );
   shiftRescaleUS2UC->SetScale( scaling );
   shiftRescaleUS2UC->SetInput( currentTile );
   try
@@ -320,16 +321,23 @@ bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer
     exit (EXIT_FAILURE);
   }
   //Give warning if over/underflow too high
-  double overUnderFlowThresh = 0.1* currentTile->GetLargestPossibleRegion().GetSize()[0] *
-  				    currentTile->GetLargestPossibleRegion().GetSize()[1];
+  double size = currentTile->GetLargestPossibleRegion().GetSize()[0] *
+  		currentTile->GetLargestPossibleRegion().GetSize()[1];
+  double overUnderFlowThresh = 0.1*size;
   currentTileUC2 = shiftRescaleUS2UC->GetOutput();
   currentTileUC2->Register();
+
+#ifdef DEBUG_GenerateRegistrationPairs
   if( shiftRescaleUS2UC->GetUnderflowCount()>overUnderFlowThresh ||
       shiftRescaleUS2UC->GetOverflowCount()>overUnderFlowThresh )
   {
-    std::cout<<"Over/underflow greather than 10 percent in current tile\n";
+    std::cout<< "Over/underflow greather than 10 percent in current tile\n"
+    	     << "Overflow: " << (shiftRescaleUS2UC->GetOverflowCount()/size) << " pc\t"
+    	     << "UnderFlow: " << (shiftRescaleUS2UC->GetUnderflowCount()/size) << " pc" << std::endl;
     return true;
   }
+#endif
+
   return false;
 }
 
@@ -398,10 +406,10 @@ void ComputeScalingConstsFromTileZero( US2ImageType::Pointer &tileZero,
   }
 
   double totalPixels, totalIter, threshold;
-  threshold = 0.02; //Change if you want to saturate more pixels
+  threshold = 0.01; //Change if you want to saturate more pixels
   totalIter = 0;
-  totalPixels = filteredIm->GetLargestPossibleRegion().GetSize()[0] *
-  		filteredIm->GetLargestPossibleRegion().GetSize()[1];
+  totalPixels = ((double)filteredIm->GetLargestPossibleRegion().GetSize()[0]) *
+  		((double)filteredIm->GetLargestPossibleRegion().GetSize()[1]);
   //Iterate till the bin that has 2% of pixels from each end and those
   //are the lower and higher values for rescaling/casting
   US2ImageType::PixelType i;
@@ -433,7 +441,8 @@ void ComputeScalingConstsFromTileZero( US2ImageType::Pointer &tileZero,
 
   if( scaleHigher==scaleLower || scaleHigher<scaleLower )
   {
-    std::cout<<"Failed to compute histogram. Check input tile.\n";
+    std::cout	<<"Failed to compute histogram. Check input tile. Lower "<< scaleLower
+		<<"\tHere " << scaleHigher;
     exit( EXIT_FAILURE );
   }
   return;
@@ -504,7 +513,7 @@ void CreateTempFolderNWriteInputChannelTiles
 #endif
 	UC2ImageType::Pointer currentTileUC2;
 	if( RescaleNCastTile( currentTile, currentTileUC2, scaleLower, scaleHigher ) )
-	  std::cout<<"Path to tile "<<currentTileUC2<<std::endl;
+	  std::cout<<"Path to tile "<<fileName<<std::endl;
 	fileName = GenerateFileNameString( tempFolder, templateNameUC, j, i ) + ".tif";
 	registerPairFileNames.push_back( fileName );
 	WriteChannel< UC2ImageType >( fileName, currentTileUC2 );
