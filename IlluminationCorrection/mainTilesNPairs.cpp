@@ -33,6 +33,8 @@
 #include "itkImage.h"
 #include "itkExtractImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
+#include "itkMedianImageFilter.h"
+#include "itkShiftScaleImageFilter.h"
 
 typedef unsigned short USPixelType;
 typedef unsigned short UCPixelType;
@@ -47,7 +49,7 @@ void usage( const char *funcName )
   std::cout << "USAGE:"
 	    << " " << funcName << " InputImage InputMetadataXML "
 	    << "OutputTemplate <PairList>.txt NumChannelForRegistration(default 0)"
-	    << " No_Ignore_Diagonal_Pairs(1 or 0-default 0)\n";
+	    << " No_Ignore_Diagonal_Pairs(1 or 0-default 0) Scaling_comp_tile(default 0)\n";
   std::cout << "First three inputs are filenames\n";
 }
 
@@ -299,25 +301,36 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   currentTile->Register();
 }
 
-void RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2,
-			unsigned short scaleLower, unsigned short scaleHigher )
+bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2,
+	US2ImageType::PixelType scaleLower, US2ImageType::PixelType scaleHigher )
 {
-  typedef itk::RescaleIntensityImageFilter< US2ImageType, UC2ImageType > RescaleUS2UCType;
-  RescaleUS2UCType::Pointer rescaleUS2UC = RescaleUS2UCType::New();
-  rescaleUS2UC->SetOutputMaximum( scaleHigher );
-  rescaleUS2UC->SetOutputMinimum( scaleLower );
-  rescaleUS2UC->SetInput( currentTile );
+  typedef itk::ShiftScaleImageFilter< US2ImageType, UC2ImageType > ShiftRescaleUS2UCType;
+  double scaling = itk::NumericTraits<UC2ImageType::PixelType>::max()/(scaleHigher-scaleLower);
+  ShiftRescaleUS2UCType::Pointer shiftRescaleUS2UC = ShiftRescaleUS2UCType::New();
+  shiftRescaleUS2UC->SetShift( scaleLower );
+  shiftRescaleUS2UC->SetScale( scaling );
+  shiftRescaleUS2UC->SetInput( currentTile );
   try
   {
-    rescaleUS2UC->Update();
+    shiftRescaleUS2UC->Update();
   }
   catch( itk::ExceptionObject & excep )
   {
     std::cerr << "Exception caught !" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
-  currentTileUC2 = rescaleUS2UC->GetOutput();
+  //Give warning if over/underflow too high
+  double overUnderFlowThresh = 0.1* currentTile->GetLargestPossibleRegion().GetSize()[0] *
+  				    currentTile->GetLargestPossibleRegion().GetSize()[1];
+  currentTileUC2 = shiftRescaleUS2UC->GetOutput();
   currentTileUC2->Register();
+  if( shiftRescaleUS2UC->GetUnderflowCount()>overUnderFlowThresh ||
+      shiftRescaleUS2UC->GetOverflowCount()>overUnderFlowThresh )
+  {
+    std::cout<<"Over/underflow greather than 10 percent in current tile\n";
+    return true;
+  }
+  return false;
 }
 
 std::string GenerateFileNameString( std::string tempFolder, std::string templateName, unsigned i, unsigned j )
@@ -348,18 +361,88 @@ void WriteChannel( std::string &fileName, typename ImageType::Pointer &writeFile
   }
 }
 
-void ComputeScalingConstsFromTileZero( US2ImageType::Pointer &tileZero, unsigned short &scaleLower,
-					unsigned short &scaleHigher )
+void ComputeScalingConstsFromTileZero( US2ImageType::Pointer &tileZero,
+	US2ImageType::PixelType &scaleLower, US2ImageType::PixelType &scaleHigher )
 {
+  typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
-  typedef itk::Statistics::Histogram< float > HistogramType;
-  ;
+  
+  //Median filter to remove noise
+  MedianFilterType::Pointer medFilter = MedianFilterType::New();
+  medFilter->SetInput( tileZero );
+  medFilter->SetRadius( 3 );
+  try
+  {
+    medFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught !" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  US2ImageType::Pointer filteredIm = medFilter->GetOutput();
+
+  //Setup and initialize histogram
+  const itk::SizeValueType numBins = itk::NumericTraits<US2ImageType::PixelType>::max();
+  itk::SizeValueType *tempHist;
+  tempHist = (itk::SizeValueType*) malloc( sizeof(itk::SizeValueType) * numBins );
+  for( US2ImageType::PixelType i=0; i<numBins; ++i )
+    tempHist[i] = 0;
+
+  //Populate histogram
+  ConstIterType it( filteredIm, filteredIm->GetRequestedRegion() );
+  for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
+  {
+    US2ImageType::PixelType pix = it.Get();
+    ++tempHist[pix];
+  }
+
+  double totalPixels, totalIter, threshold;
+  threshold = 0.02; //Change if you want to saturate more pixels
+  totalIter = 0;
+  totalPixels = filteredIm->GetLargestPossibleRegion().GetSize()[0] *
+  		filteredIm->GetLargestPossibleRegion().GetSize()[1];
+  //Iterate till the bin that has 2% of pixels from each end and those
+  //are the lower and higher values for rescaling/casting
+  US2ImageType::PixelType i;
+  for( i=0; i<numBins; ++i )
+  {
+    totalIter += tempHist[i];
+    double ratio = totalIter/totalPixels;
+    if( ratio >= threshold )
+    {
+      if( i>0 )
+	--i;
+      break;
+    }
+  }
+  scaleLower = i;
+  totalIter = 0;
+  for( i=numBins-1; i>0; --i )
+  {
+    totalIter += tempHist[i];
+    double ratio = totalIter/totalPixels;
+    if( ratio >= threshold )
+    {
+      if( i<(numBins-1) )
+	++i;
+      break;
+    }
+  }
+  scaleHigher = i;
+
+  if( scaleHigher==scaleLower || scaleHigher<scaleLower )
+  {
+    std::cout<<"Failed to compute histogram. Check input tile.\n";
+    exit( EXIT_FAILURE );
+  }
+  return;
 }
 
 void CreateTempFolderNWriteInputChannelTiles
 	( std::string inputImage, std::vector< TileInfo > &tilesInfo,
 	  std::vector< std::string > &registerPairFileNames, std::string &tempFolder,
-	  std::string &templateName, unsigned registrationChannel
+	  std::string &templateName, unsigned registrationChannel, unsigned histogramTile
 	)
 {
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
@@ -396,10 +479,15 @@ void CreateTempFolderNWriteInputChannelTiles
   tempFolder = CheckWritePermissionsNCreateTempFolder();
   std::string templateNameUC = templateName + "_UC";
 
-  unsigned short scaleLower, scaleHigher;
+  //Get rescaling constants
+  US2ImageType::PixelType scaleLower, scaleHigher;
   US2ImageType::Pointer tileZero;
-  GetTile( tileZero, readImage, registrationChannel );
+  GetTile( tileZero, readImage, (histogramTile*tilesInfo.at(0).sizeC+registrationChannel) );
   ComputeScalingConstsFromTileZero( tileZero, scaleLower, scaleHigher );
+#ifdef DEBUG_GenerateRegistrationPairs
+	std::cout<<"Rescaling constants: L="<<scaleLower<<"\tH= "<<scaleHigher<<"\n";
+#endif
+
   for( unsigned i=0; i<tilesInfo.size(); ++i )
     for( unsigned j=0; j<tilesInfo.at(i).sizeC; ++j )
     {
@@ -415,7 +503,8 @@ void CreateTempFolderNWriteInputChannelTiles
 	std::cout<<(i*tilesInfo.at(0).sizeC+j)<<"\t";
 #endif
 	UC2ImageType::Pointer currentTileUC2;
-	RescaleNCastTile( currentTile, currentTileUC2, scaleLower, scaleHigher );
+	if( RescaleNCastTile( currentTile, currentTileUC2, scaleLower, scaleHigher ) )
+	  std::cout<<"Path to tile "<<currentTileUC2<<std::endl;
 	fileName = GenerateFileNameString( tempFolder, templateNameUC, j, i ) + ".tif";
 	registerPairFileNames.push_back( fileName );
 	WriteChannel< UC2ImageType >( fileName, currentTileUC2 );
@@ -445,7 +534,7 @@ void WritePairsFile( std::vector< std::string > &registerPairFileNames,
 
 int main(int argc, char *argv[])
 { 
-  if( argc < 5 || argc > 7 )
+  if( argc < 5 || argc > 8 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
@@ -458,12 +547,15 @@ int main(int argc, char *argv[])
   std::string inputXml         = argv[2]; //Name of the xml file with the metadata
   std::string outputTemplate   = argv[3]; //Template filename for the tiles
   std::string registrationFile = argv[4]; //Registration filename
-  int numChannel = 0;			  //Number of the channel to be used to run registration
+  unsigned numChannel = 0;		  //Number of the channel to be used to run registration
   bool noIgnoreDiagonal = false;	  //Don't write diagonal pairs to registration
+  unsigned histogramTile = 0;		  //Tile on which the histogram comp for rescaling is performed
   if( argc == 6 )
     numChannel = atoi(argv[5]);
   if( argc == 7 && atoi(argv[6]) == 1 )
     noIgnoreDiagonal = true;
+  if( argc == 8 )
+    histogramTile = atoi(argv[7]);
 
   //Read the xml file and get number of files
   unsigned numberOfFiles = GetNumberOfFilesFromXML( inputXml );
@@ -484,7 +576,7 @@ int main(int argc, char *argv[])
   std::vector< std::string > registerPairFileNames;
   std::string tempFolder;
   CreateTempFolderNWriteInputChannelTiles( inputImage, tilesInfo, registerPairFileNames, tempFolder,
-	outputTemplate, numChannel );
+	outputTemplate, numChannel, histogramTile );
   registrationFile = tempFolder + registrationFile;
   WritePairsFile( registerPairFileNames, registrationPairs, registrationFile ); 
 
