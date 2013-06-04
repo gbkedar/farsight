@@ -55,8 +55,9 @@ typedef itk::Image< USPixelType, 3 > USImageType;
 typedef float FloatPixelType;
 typedef itk::Image< FloatPixelType, 3 > FloatImageType;
 
-std::vector<float> compute_ec_features( USImageType::Pointer input_image,  USImageType::Pointer inp_labeled, int number_of_rois, unsigned short thresh, int surr_dist, int inside_dist ){
-
+std::vector<float> compute_ec_features( USImageType::Pointer input_image,  USImageType::Pointer inp_labeled,
+				int number_of_rois, unsigned short thresh, int surr_dist, int inside_dist )
+{
 	std::vector< float > qfied_num;
 	std::vector< USImageType::PixelType > labelsList;
 	std::vector< double > quantified_numbers_cell;
@@ -575,6 +576,7 @@ USImageType::PixelType returnthresh( itk::SmartPointer<USImageType> input_image,
 		iter.SetFrequency(norm_freq);
 		++i;
 	}
+	free( tempHist );
 
 	std::cout<<"Histogram computed\n";
 
