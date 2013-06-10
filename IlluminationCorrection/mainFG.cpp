@@ -165,8 +165,8 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
 
-  std::string inputImageName  = argv[0]; //Just In case..
-  std::string outputImageName = argv[1]; //Name of the input image
+  std::string inputImageName  = argv[1]; //Just In case..
+  std::string outputImageName = argv[2]; //Name of the input image
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::ImageFileWriter< US3ImageType >    WriterType;
