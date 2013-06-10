@@ -14,7 +14,7 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
-//#define DEBUG_GenerateRegistrationPairs
+#define DEBUG_GenerateRegistrationPairs
 
 #include <tinyxml/tinyxml.h>
 
@@ -299,6 +299,10 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   }
   currentTile = deFilter->GetOutput();
   currentTile->Register();
+#ifdef DEBUG_GenerateRegistrationPairs
+  std::cout<<"Returning tile "<<i<<std::endl;
+#endif //DEBUG_GenerateRegistrationPairs
+
 }
 
 bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer &currentTileUC2,
@@ -324,7 +328,8 @@ bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer
   currentTileUC2->Register();
 
 #ifdef DEBUG_GenerateRegistrationPairs
-  //Give warning if over/underflow too high
+  //Give warning if over/underflow too high -- Needs rewrite
+/*
   double size = currentTile->GetLargestPossibleRegion().GetSize()[0] *
   		currentTile->GetLargestPossibleRegion().GetSize()[1];
   double overUnderFlowThresh = 0.1*size;
@@ -336,6 +341,7 @@ bool RescaleNCastTile( US2ImageType::Pointer &currentTile, UC2ImageType::Pointer
     	     << "UnderFlow: " << (shiftRescaleUS2UC->GetUnderflowCount()/size) << " pc" << std::endl;
     return true;
   }
+*/
 #endif
 
   return false;
@@ -494,7 +500,8 @@ void CreateTempFolderNWriteInputChannelTiles
   GetTile( tileZero, readImage, (histogramTile*tilesInfo.at(0).sizeC+registrationChannel) );
   ComputeScalingConstsFromTileZero( tileZero, scaleLower, scaleHigher );
 #ifdef DEBUG_GenerateRegistrationPairs
-	std::cout<<"Rescaling constants: L="<<scaleLower<<"\tH= "<<scaleHigher<<"\n";
+	std::cout<<"Rescaling constants: L="<<scaleLower<<"\tH= "<<scaleHigher<<" using tile"
+		 <<(histogramTile*tilesInfo.at(0).sizeC+registrationChannel)<<"\n";
 #endif
 
   for( unsigned i=0; i<tilesInfo.size(); ++i )

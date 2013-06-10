@@ -150,8 +150,6 @@ US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_imag
   for(US2ImageType::PixelType i=0; i < num_in_fg; ++itNum, ++i)
     thresh = (static_cast<float>(*itNum));
 
-  std::cout<<"Threshold computed: "<<thresh<<std::endl;
-
   return (US2ImageType::PixelType)(thresh+0.5);
 }
 
@@ -192,6 +190,8 @@ int main(int argc, char *argv[])
   itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
   itk::IndexValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
   itk::IndexValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
+
+  std::cout<<"Number of slices:"<<numSlices<<std::endl;
   US2ImageType::PixelType lowT  = itk::NumericTraits< US2ImageType::PixelType >::max();
   US2ImageType::PixelType highT = 0;
   double meanT = 0;
@@ -354,7 +354,7 @@ int main(int argc, char *argv[])
 	  {
 	    US2ImageType::IndexType wIndex, fIndex;
 	    wIndex[0] = rVal; wIndex[1] = cVal;
-	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (j*WSz)+cVal;
+	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (k*WSz)+cVal;
 	    itCrop.SetIndex( wIndex );
 	    itFull.SetIndex( fIndex );
 	    itCrop.Set( itFull.Get() );
@@ -412,7 +412,7 @@ int main(int argc, char *argv[])
       for( itk::IndexValueType k=0; k<numRow; ++k )
       {
         US2ImageType::IndexType cIndex; cIndex[0] = k; cIndex[1] = j;
-	US3ImageType::IndexType oIndex; oIndex[0] = k; oIndex[1] = j; oIndex[2] = k;
+	US3ImageType::IndexType oIndex; oIndex[0] = k; oIndex[1] = j; oIndex[2] = i;
 	itOut.SetIndex( oIndex ); itCFull.SetIndex( cIndex );
 	itOut.Set( itCFull.Get() );
       }
