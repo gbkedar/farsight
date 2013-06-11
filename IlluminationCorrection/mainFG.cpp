@@ -28,6 +28,7 @@
 #include "itkExtractImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkMedianImageFilter.h"
+#include "itkMeanImageFilter.h"
 #include "itkShiftScaleImageFilter.h"
 #include "itkScalarImageToHistogramGenerator.h"
 #include "itkBinaryThresholdImageFilter.h"
@@ -72,7 +73,7 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
 }
 
 US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_image,
-					int num_bin_levs, int num_in_fg )
+int num_bin_levs, int num_in_fg )
 {
   //Instantiate the different image and filter types that will be used
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIteratorType;
@@ -80,10 +81,10 @@ US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_imag
   typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
 
   //Create a temporary histogram container:
-  const int numBins = itk::NumericTraits<US2ImageType::PixelType>::max();
+  const itk::SizeValueType numBins = itk::NumericTraits<US2ImageType::PixelType>::max()+1;
   double *tempHist;
   tempHist = (double*) malloc( sizeof(double) * numBins );
-  for(US2ImageType::PixelType i=0; i<numBins; ++i)
+  for(itk::SizeValueType i=0; i<numBins; ++i)
      tempHist[i] = 0;
 
   US2ImageType::PixelType maxval = itk::NumericTraits<US2ImageType::PixelType>::ZeroValue();
@@ -98,15 +99,15 @@ US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_imag
     if( pix < minval ) minval = pix;
   }
   //return max of type if there is no variation in the staining
-  if( (maxval-minval)<3 ) return itk::NumericTraits<US2ImageType::PixelType>::max(); 
-  const US2ImageType::PixelType numBinsPresent = maxval+1;
+  if( (maxval-minval)<3 ) return itk::NumericTraits<US2ImageType::PixelType>::max();
+  const itk::SizeValueType numBinsPresent = maxval+1;
   
   //Find max value in the histogram
   double floatIntegerMax = itk::NumericTraits<US2ImageType::PixelType>::max();
   double max = 0.0;
-  for(US2ImageType::PixelType i=0; i<numBinsPresent; ++i)
+  for(itk::SizeValueType i=0; i<numBinsPresent; ++i)
     if( tempHist[i] > max )
-    	max = tempHist[i];
+     max = tempHist[i];
 
   double scaleFactor = 1;
   if(max >= floatIntegerMax)
@@ -142,7 +143,7 @@ US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_imag
   calculator->SetNumberOfThresholds( num_bin_levs );
   calculator->SetInputHistogram( histogram );
   calculator->Update();
-  const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
+  const CalculatorType::OutputType &thresholdVector = calculator->GetOutput();
   CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
 
   float thresh;
@@ -169,6 +170,7 @@ int main(int argc, char *argv[])
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::ImageFileWriter< US3ImageType >    WriterType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
+  typedef itk::MeanImageFilter< US2ImageType, US2ImageType > MeanFilterType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > IterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
@@ -196,12 +198,19 @@ int main(int argc, char *argv[])
   US2ImageType::PixelType highT = 0;
   double meanT = 0;
 
-  std::vector< itk::SmartPointer<US2ImageType> > medianImages;
+  std::vector< itk::SmartPointer<US2ImageType> > meanImages;
   std::vector< itk::SmartPointer<US2ImageType> > contourImages;
   std::vector< US2ImageType::PixelType > thresholds;
-  thresholds.resize( numSlices ); medianImages.resize( numSlices );
+  thresholds.resize( numSlices ); meanImages.resize( numSlices );
   contourImages.resize( numSlices );
+#ifdef _OPENMP
+  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1)
+#else
   #pragma omp parallel for
+#endif
+#endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     US2ImageType::Pointer currentSlice;
@@ -212,14 +221,14 @@ int main(int argc, char *argv[])
     medFilter->SetInput( currentSlice );
     medFilter->SetRadius( 3 );
 
-    //Get Contours using a large median filter 
-    MedianFilterType::Pointer medFilter1 = MedianFilterType::New();
-    medFilter1->SetInput( currentSlice );
-    medFilter1->SetRadius( 9 );
+    //Get Contours using a large mean filter 
+    MeanFilterType::Pointer meanFilter = MeanFilterType::New();
+    meanFilter->SetInput( currentSlice );
+    meanFilter->SetRadius( 9 );
     try
     {
-      medFilter->Update();
-      medFilter1->Update();
+      medFilter ->Update();
+      meanFilter->Update();
     }
     catch( itk::ExceptionObject & excep )
     {
@@ -227,7 +236,7 @@ int main(int argc, char *argv[])
       exit (EXIT_FAILURE);
     }
     US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
-    US2ImageType::Pointer contourIm = medFilter1->GetOutput();
+    US2ImageType::Pointer contourIm = meanFilter->GetOutput();
     
     ConstIterType it( medFiltIm, medFiltIm->GetRequestedRegion() );
     IterType it1( contourIm, contourIm->GetRequestedRegion() );
@@ -246,7 +255,7 @@ int main(int argc, char *argv[])
       if( it1.Get()>curThresh )
 	it1.Set( 1 );
     }
-    medFiltIm->Register(); medianImages.at(i) = medFiltIm;
+    medFiltIm->Register(); meanImages.at(i) = medFiltIm;
     contourIm->Register(); contourImages.at(i) = contourIm;
     thresholds.at(i) = returnthresh( medFiltIm, 1, 1 );
     if( thresholds.at(i)>highT )
@@ -266,9 +275,12 @@ int main(int argc, char *argv[])
       }
     }
     #pragma omp critical
-    meanT += thresholds.at(i);
+    {
+      meanT += thresholds.at(i);
+    }
   }
   meanT /= numSlices;
+  std::cout<<"Mean threshold:"<<meanT<<std::endl<<std::flush;
 
   //Compute thresh for all slices from threshs from individual slices
   double sigmaT = 0, threshSlices = 0;
@@ -317,15 +329,23 @@ int main(int argc, char *argv[])
   }
   std::cout<<"Main threshold: "<<threshSlices<<"\t"
   	   <<"Sigma: "<<sigmaT<<"\t"
-	   <<"Mod thr: "<<(threshSlices-(2*sigmaT))<<std::endl;
-  threshSlices -= (2*sigmaT);
+//	   <<"Mod thr: "<<(threshSlices-(2*sigmaT))
+	   <<std::endl<<std::flush;
+//  threshSlices -= (2*sigmaT);
+//  unsigned count = 0;
   //Windowed thresholding and get fg points for all the slices
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for  schedule(dynamic,1)
+#else
   #pragma omp parallel for
+#endif
+#endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     itk::IndexValueType numjParts = std::ceil( ((double)numRow)/((double)WSz));
     itk::IndexValueType numkParts = std::ceil( ((double)numCol)/((double)WSz));
-    IterType  itFull( medianImages.at(i),   medianImages.at(i)->GetRequestedRegion() );
+    IterType  itFull( meanImages.at(i),   meanImages.at(i)->GetRequestedRegion() );
     IterType itCFull( contourImages.at(i), contourImages.at(i)->GetRequestedRegion() );
     for( itk::IndexValueType j=0; j<numjParts; ++j )
       for( itk::IndexValueType k=0; k<numkParts; ++k )
@@ -362,12 +382,13 @@ int main(int argc, char *argv[])
 	US2ImageType::PixelType curThr = returnthresh( windowIm, 1, 1 );
 	if( curThr < threshSlices )
 	  curThr = threshSlices;
+	//Rewrite the image with the threshold
 	for( itk::SizeValueType cVal=0; cVal<size[1]; ++cVal )
 	  for( itk::SizeValueType rVal=0; rVal<size[0]; ++rVal )
 	  {
 	    US2ImageType::IndexType fIndex,cIndex;
-	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (j*WSz)+cVal;
-	    cIndex[0] = (j*WSz)+rVal; cIndex[1] = (j*WSz)+cVal;
+	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (k*WSz)+cVal;
+	    cIndex[0] = (j*WSz)+rVal; cIndex[1] = (k*WSz)+cVal;
 	    itFull.SetIndex( fIndex ); itCFull.SetIndex( cIndex );
 	    if( itFull.Get() < curThr )
 	    {
@@ -382,7 +403,13 @@ int main(int argc, char *argv[])
 	    }
 	  }
       }
+/*      if(!(count%25))
+        std::cout<<"Count "<<count++<<"\tTile "<<i<<std::endl<<std::flush;
+      else
+	++count;*/
   }
+  std::cout<<"Done. Copying image."
+	   <<std::endl<<std::flush;
 
   //Copy into 3d image
   US3ImageType::Pointer outputImage = US3ImageType::New();
@@ -403,7 +430,13 @@ int main(int argc, char *argv[])
   outputImage->FillBuffer(0);
   outputImage->Update();
 
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for  schedule(dynamic,1)
+#else
   #pragma omp parallel for
+#endif
+#endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     IterType3d itOut( outputImage, outputImage->GetRequestedRegion() );
@@ -416,12 +449,6 @@ int main(int argc, char *argv[])
 	itOut.SetIndex( oIndex ); itCFull.SetIndex( cIndex );
 	itOut.Set( itCFull.Get() );
       }
-  }
-
-  for( itk::IndexValueType i=0; i<numSlices; ++i )
-  {
-    medianImages.at(i)->UnRegister();
-    contourImages.at(i)->UnRegister();
   }
 
   WriterType::Pointer writer = WriterType::New();
@@ -437,5 +464,20 @@ int main(int argc, char *argv[])
     std::cerr << e << std::endl;
     exit( EXIT_FAILURE );
   }
+
+  try
+  {
+    for( itk::IndexValueType i=0; i<numSlices; ++i )
+    {
+      meanImages.at(i)->UnRegister();
+      contourImages.at(i)->UnRegister();
+    }
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+
   exit( EXIT_SUCCESS );
 }
