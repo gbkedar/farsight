@@ -34,14 +34,15 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
+#include "adaptive_binarization.h"
+
 typedef unsigned short USPixelType;
 typedef unsigned char  UCPixelType;
 const unsigned int     Dimension3 = 3;
 const unsigned int     Dimension2 = 2;
 typedef itk::Image< USPixelType, Dimension3 > US3ImageType;
+typedef itk::Image< UCPixelType, Dimension3 > UC3ImageType;
 typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
-
-#define WSz 128
 
 void usage( const char *funcName )
 {
@@ -72,86 +73,130 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   currentTile->Register();
 }
 
-US2ImageType::PixelType returnthresh( itk::SmartPointer<US2ImageType> input_image,
-int num_bin_levs, int num_in_fg )
+void AdaptivelyBinarizeTile( US2ImageType::Pointer InputImage,
+			     US2ImageType::Pointer BinaryImage )
 {
-  //Instantiate the different image and filter types that will be used
-  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIteratorType;
-  typedef itk::Statistics::Histogram< float > HistogramType;
-  typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
+  typedef itk::RegionOfInterestImageFilter< US2ImageType, US2ImageType > ROIFilterType;
+  typedef itk::ConnectedComponentImageFilter< US2ImageType, US2ImageType >
+  								ConnectedComponentFilterType;
+  typedef itk::ImageRegionConstIterator< US2ImageType > BinOutConstIteratorType;
+  typedef itk::ImageRegionIteratorWithIndex< US2ImageType > BinMontageIteratorType;
 
-  //Create a temporary histogram container:
-  const itk::SizeValueType numBins = itk::NumericTraits<US2ImageType::PixelType>::max()+1;
-  double *tempHist;
-  tempHist = (double*) malloc( sizeof(double) * numBins );
-  for(itk::SizeValueType i=0; i<numBins; ++i)
-     tempHist[i] = 0;
+  //Redefine some constants
+  itk::SizeValueType TileSizeX = InputImage->GetLargestPossibleRegion().GetSize()[0];
+  itk::SizeValueType TileSizeY = InputImage->GetLargestPossibleRegion().GetSize()[1];
 
-  US2ImageType::PixelType maxval = itk::NumericTraits<US2ImageType::PixelType>::ZeroValue();
-  US2ImageType::PixelType minval = itk::NumericTraits<US2ImageType::PixelType>::max();
-  //Populate the histogram (assume pixel type is actually is some integer type):
-  ConstIteratorType it( input_image, input_image->GetRequestedRegion() );
-  for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
+  //Crop Input Image
+  unsigned char *DataPtr;
+  DataPtr = (unsigned char*)malloc( sizeof(unsigned char)*TileSizeX*TileSizeY );
+{ //Scoping for temp cropimage
+    US2ImageType::RegionType CroppedRegion;
+    CroppedRegion.SetSize ( Size );
+    CroppedRegion.SetIndex( Start );
+    ROIFilterType::Pointer CropImageFilter = ROIFilterType::New();
+    CropImageFilter->SetInput( InputImage );
+    CropImageFilter->SetRegionOfInterest( CroppedRegion );
+    try{ CropImageFilter->Update(); }
+    catch( itk::ExceptionObject & excp )
+    {
+      std::cerr <<  "Extraction for binarization failed" << excp << std::endl;
+    }
+#if 0
+  typedef itk::ImageFileWriter< US2ImageType > BinaryWriterType1;
+  BinaryWriterType1::Pointer binwriter1 = BinaryWriterType1::New();
+  binwriter1->SetInput( CropImageFilter->GetOutput() );
+  std::stringstream filess1;
+  filess1 << Start[0] << "_" <<Start[1] << "_" << Start[2];
+  std::string OutFile1 = TempFolder + "/Temp_" + filess1.str() + "_crop.tif" ;
+  binwriter1->SetFileName( OutFile1.c_str() );
+  try{ binwriter1->Update(); }
+  catch( itk::ExceptionObject & excp ){ std::cerr << excp << std::endl; }
+#endif
+    BinMontageIteratorType PixBuf(  CropImageFilter->GetOutput(),
+    				CropImageFilter->GetOutput()->GetLargestPossibleRegion() );
+    itk::SizeValueType Index = 0;
+    for( PixBuf.GoToBegin(); !PixBuf.IsAtEnd(); ++PixBuf )
+    {
+      DataPtr[Index] = PixBuf.Get();
+      ++Index;
+    }
+} //End scoping for temp cropimage
+
+  //Create binarization object
+  ftk::NuclearSegmentation * newNucSeg = new ftk::NuclearSegmentation();
+
+  //Read Parameters
+  for(int i=0; i<(int)definition->nuclearParameters.size(); ++i)
+    newNucSeg->SetParameter(	definition->nuclearParameters.at(i).name,
+				int(definition->nuclearParameters.at(i).value) );
+
+  //Convert input image to FTKImage
+  ftk::Image::Pointer FTKIImage = ftk::Image::New();
+  std::vector<unsigned char> color;
+  color.assign(3,255);
+  FTKIImage->AppendChannelFromData3D( (void*)DataPtr,
+					itk::ImageIOBase::UCHAR, sizeof(unsigned char),
+					Size[0], Size[1], Size[2], "nuc", color, false );
+  newNucSeg->SetInput( FTKIImage, "nuc", 0 );
+
+  //Run Binarization
+  newNucSeg->Binarize(true);
+
+  //Get Output
+  ftk::Image::Pointer FTKOImage = newNucSeg->GetLabelImage();
+  US2ImageType::Pointer BinIm = FTKOImage->
+					GetItkPtr< US2ImageType::PixelType >( 0, 0, ftk::Image::DEFAULT );
+
+  //Check if the tile has more than 3 connected components
+  ConnectedComponentFilterType::Pointer connectedComponentFilter = ConnectedComponentFilterType::New();
+  connectedComponentFilter->SetInput( BinIm );
+  connectedComponentFilter->FullyConnectedOn();
+  try
   {
-    US2ImageType::PixelType pix = it.Get();
-    ++tempHist[pix];
-    if( pix > maxval ) maxval = pix;
-    if( pix < minval ) minval = pix;
+    connectedComponentFilter->Update();
   }
-  //return max of type if there is no variation in the staining
-  if( (maxval-minval)<3 ) return itk::NumericTraits<US2ImageType::PixelType>::max();
-  const itk::SizeValueType numBinsPresent = maxval+1;
-  
-  //Find max value in the histogram
-  double floatIntegerMax = itk::NumericTraits<US2ImageType::PixelType>::max();
-  double max = 0.0;
-  for(itk::SizeValueType i=0; i<numBinsPresent; ++i)
-    if( tempHist[i] > max )
-     max = tempHist[i];
-
-  double scaleFactor = 1;
-  if(max >= floatIntegerMax)
-    scaleFactor = floatIntegerMax / max;
-
-  HistogramType::Pointer histogram = HistogramType::New() ;
-  // initialize histogram
-  HistogramType::SizeType size;
-  HistogramType::MeasurementVectorType lowerBound;
-  HistogramType::MeasurementVectorType upperBound;
-
-  lowerBound.SetSize(1);
-  upperBound.SetSize(1);
-  size.SetSize(1);
-
-  lowerBound.Fill(0.0);
-  upperBound.Fill((double)maxval);
-  size.Fill(numBinsPresent);
-
-  histogram->SetMeasurementVectorSize(1);
-  histogram->Initialize(size, lowerBound, upperBound ) ;
-
-  US2ImageType::PixelType i=0;
-  for (HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter )
+  catch( itk::ExceptionObject & excp )
   {
-    float norm_freq = (float)(tempHist[i] * scaleFactor);
-    iter.SetFrequency(norm_freq);
-    ++i;
+    std::cerr <<  "CC filter for initial binarization failed" << excp << std::endl;
   }
-  free( tempHist );
 
-  CalculatorType::Pointer calculator = CalculatorType::New();
-  calculator->SetNumberOfThresholds( num_bin_levs );
-  calculator->SetInputHistogram( histogram );
-  calculator->Update();
-  const CalculatorType::OutputType &thresholdVector = calculator->GetOutput();
-  CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
+  //Tiles with only background usually have 1-3 CCs
+  if( connectedComponentFilter->GetObjectCount() > 3  )
+  {
+    BinOutConstIteratorType BinOutConstIter( BinIm, BinIm->GetLargestPossibleRegion() );
+    BinMontageIteratorType BinMontagIter( BinaryImage, BinaryImage->GetLargestPossibleRegion() );
 
-  float thresh;
-
-  for(US2ImageType::PixelType i=0; i < num_in_fg; ++itNum, ++i)
-    thresh = (static_cast<float>(*itNum));
-
-  return (US2ImageType::PixelType)(thresh+0.5);
+    //Copy output of tile into montage
+    for( itk::SizeValueType k=Start[2]; k<numStacks; ++k )
+      for( itk::SizeValueType l=Start[1]; l<(Start[1]+TileSize); ++l )
+        for( itk::SizeValueType m=Start[0]; m<(Start[0]+TileSize); ++m )
+        {
+	  US2ImageType::IndexType FtkBinIndex;
+	  FtkBinIndex[0] = m-Start[0];
+	  FtkBinIndex[1] = l-Start[1];
+	  FtkBinIndex[2] = k;
+	  US2ImageType::IndexType BinaryImIndex;
+	  BinaryImIndex[0] = m;
+	  BinaryImIndex[1] = l;
+	  BinaryImIndex[2] = k;
+	  BinOutConstIter.SetIndex( FtkBinIndex );
+	  BinMontagIter.SetIndex( BinaryImIndex );
+	  if( BinOutConstIter.Get() )
+	    BinMontagIter.Set( 255 );
+        }
+  }
+#if 0
+  typedef itk::ImageFileWriter< US2ImageType > BinaryWriterType;
+  BinaryWriterType::Pointer binwriter = BinaryWriterType::New();
+  binwriter->SetInput( BinIm );
+  std::stringstream filess;
+  filess << Start[0] << "_" <<Start[1] << "_" << Start[2];
+  std::string OutFile = TempFolder + "/Temp_" + filess.str() + "_Bin.tif" ;
+  binwriter->SetFileName( OutFile.c_str() );
+  try{ binwriter->Update(); }
+  catch( itk::ExceptionObject & excp ){ std::cerr << excp << std::endl; }
+#endif
+  delete newNucSeg;
 }
 
 int main(int argc, char *argv[])
@@ -168,9 +213,8 @@ int main(int argc, char *argv[])
   std::string outputImageName = argv[2]; //Name of the input image
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
-  typedef itk::ImageFileWriter< US3ImageType >    WriterType;
+  typedef itk::ImageFileWriter< UC3ImageType >    WriterType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
-  typedef itk::MeanImageFilter< US2ImageType, US2ImageType > MeanFilterType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > IterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
@@ -194,15 +238,9 @@ int main(int argc, char *argv[])
   itk::IndexValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
 
   std::cout<<"Number of slices:"<<numSlices<<std::endl;
-  US2ImageType::PixelType lowT  = itk::NumericTraits< US2ImageType::PixelType >::max();
-  US2ImageType::PixelType highT = 0;
-  double meanT = 0;
 
-  std::vector< itk::SmartPointer<US2ImageType> > meanImages;
-  std::vector< itk::SmartPointer<US2ImageType> > contourImages;
-  std::vector< US2ImageType::PixelType > thresholds;
-  thresholds.resize( numSlices ); meanImages.resize( numSlices );
-  contourImages.resize( numSlices );
+  std::vector< itk::SmartPointer<US2ImageType> > threshImages;
+  threshImages.resize( numSlices );
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -219,16 +257,11 @@ int main(int argc, char *argv[])
     //Median filter for each slice to remove thermal noise
     MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
-    medFilter->SetRadius( 3 );
+    medFilter->SetRadius( 5 );
 
-    //Get Contours using a large mean filter 
-    MeanFilterType::Pointer meanFilter = MeanFilterType::New();
-    meanFilter->SetInput( currentSlice );
-    meanFilter->SetRadius( 9 );
     try
     {
       medFilter ->Update();
-      meanFilter->Update();
     }
     catch( itk::ExceptionObject & excep )
     {
@@ -236,178 +269,14 @@ int main(int argc, char *argv[])
       exit (EXIT_FAILURE);
     }
     US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
-    US2ImageType::Pointer contourIm = meanFilter->GetOutput();
+    US2ImageType::Pointer thresholdIm;
+
+    AdaptivelyBinarizeTile( medFiltIm, thresholdIm );
+    thresholdIm->Register();
     
-    ConstIterType it( medFiltIm, medFiltIm->GetRequestedRegion() );
-    IterType it1( contourIm, contourIm->GetRequestedRegion() );
-    it1.GoToBegin();
-    for( it.GoToBegin(); !it.IsAtEnd(); ++it, ++it1 )
-    {
-      if( it.Get()>it1.Get() )
-        it1.Set( it.Get()-it1.Get() );
-      else
-	it1.Set( 0 );
-    }
-    US2ImageType::PixelType curThresh = returnthresh( contourIm, 1, 1 );
-    for( it1.GoToBegin(); !it1.IsAtEnd(); ++it1 )
-    {
-      it1.Set( 0 );
-      if( it1.Get()>curThresh )
-	it1.Set( 1 );
-    }
-    medFiltIm->Register(); meanImages.at(i) = medFiltIm;
-    contourIm->Register(); contourImages.at(i) = contourIm;
-    thresholds.at(i) = returnthresh( medFiltIm, 1, 1 );
-    if( thresholds.at(i)>highT )
-    {
-      #pragma omp critical
-      {
-        if( thresholds.at(i)>highT )
-	  highT = thresholds.at(i);
-      }
-    }
-    if( thresholds.at(i)<lowT )
-    {
-      #pragma omp critical
-      {
-        if( thresholds.at(i)<lowT )
-	  lowT = thresholds.at(i);
-      }
-    }
-    #pragma omp critical
-    {
-      meanT += thresholds.at(i);
-    }
+    threshImages.at(i) = thresholdIm;
   }
-  meanT /= numSlices;
-  std::cout<<"Mean threshold:"<<meanT<<std::endl<<std::flush;
 
-  //Compute thresh for all slices from threshs from individual slices
-  double sigmaT = 0, threshSlices = 0;
-  {
-    typedef itk::Statistics::Histogram< float > HistogramType;
-    typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
-    std::vector< double > histVals( (highT-lowT+1), 0 );
-    for( itk::SizeValueType i=0; i<thresholds.size(); ++i )
-    {
-      histVals[(thresholds.at(i)-1)] += 1;
-      sigmaT += (((double)(meanT-thresholds.at(i)))*((double)(meanT-thresholds.at(i))));
-    }
-    sigmaT /= numSlices;
-    sigmaT = std::sqrt(sigmaT);
-    HistogramType::Pointer histogram = HistogramType::New() ;
-    // initialize histogram
-    HistogramType::SizeType size;
-    HistogramType::MeasurementVectorType lowerBound;
-    HistogramType::MeasurementVectorType upperBound;
-
-    lowerBound.SetSize(1);
-    upperBound.SetSize(1);
-    size.SetSize(1);
-
-    lowerBound.Fill((double)lowT);
-    upperBound.Fill((double)highT);
-    size.Fill((highT-lowT+1));
-
-    histogram->SetMeasurementVectorSize(1);
-    histogram->Initialize(size, lowerBound, upperBound ) ;
-    US2ImageType::PixelType i = 0;
-    for( HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter )
-    {
-      iter.SetFrequency(histVals.at(i));
-      ++i;
-    }
-
-    CalculatorType::Pointer calculator = CalculatorType::New();
-    calculator->SetNumberOfThresholds( 1 );
-    calculator->SetInputHistogram( histogram );
-    calculator->Update();
-    const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
-    CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
-    for(US2ImageType::PixelType i=0; i < 1; ++itNum, ++i)
-      threshSlices = (static_cast<float>(*itNum));
-  }
-  std::cout<<"Main threshold: "<<threshSlices<<"\t"
-  	   <<"Sigma: "<<sigmaT<<"\t"
-//	   <<"Mod thr: "<<(threshSlices-(2*sigmaT))
-	   <<std::endl<<std::flush;
-//  threshSlices -= (2*sigmaT);
-//  unsigned count = 0;
-  //Windowed thresholding and get fg points for all the slices
-#ifdef _OPENMP
-#if _OPENMP >= 200805L
-  #pragma omp parallel for  schedule(dynamic,1)
-#else
-  #pragma omp parallel for
-#endif
-#endif
-  for( itk::IndexValueType i=0; i<numSlices; ++i )
-  {
-    itk::IndexValueType numjParts = std::ceil( ((double)numRow)/((double)WSz));
-    itk::IndexValueType numkParts = std::ceil( ((double)numCol)/((double)WSz));
-    IterType  itFull( meanImages.at(i),   meanImages.at(i)->GetRequestedRegion() );
-    IterType itCFull( contourImages.at(i), contourImages.at(i)->GetRequestedRegion() );
-    for( itk::IndexValueType j=0; j<numjParts; ++j )
-      for( itk::IndexValueType k=0; k<numkParts; ++k )
-      {
-	US2ImageType::Pointer windowIm = US2ImageType::New();
-	//Allocate windowed image
-	US2ImageType::PointType origin;
-	origin[0] = 0; origin[1] = 0;
-	windowIm->SetOrigin( origin );
-	US2ImageType::IndexType start;
-	start[0] = 0; start[1] = 0;
-	US2ImageType::SizeType size;
-	size[0] = (((j+1)*WSz-1)>=numRow) ? numRow-(j*WSz) : WSz;
-	size[1] = (((k+1)*WSz-1)>=numCol) ? numCol-(k*WSz) : WSz;
-	US2ImageType::RegionType region;
-	region.SetSize( size );
-	region.SetIndex( start );
-	windowIm->SetRegions( region );
-	windowIm->Allocate();
-	windowIm->FillBuffer(0);
-	windowIm->Update();
-	//Copy windowed image
-	IterType itCrop( windowIm, windowIm->GetRequestedRegion() );
-	for( itk::SizeValueType cVal=0; cVal<size[1]; ++cVal )
-	  for( itk::SizeValueType rVal=0; rVal<size[0]; ++rVal )
-	  {
-	    US2ImageType::IndexType wIndex, fIndex;
-	    wIndex[0] = rVal; wIndex[1] = cVal;
-	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (k*WSz)+cVal;
-	    itCrop.SetIndex( wIndex );
-	    itFull.SetIndex( fIndex );
-	    itCrop.Set( itFull.Get() );
-	  }
-	US2ImageType::PixelType curThr = returnthresh( windowIm, 1, 1 );
-	if( curThr < threshSlices )
-	  curThr = threshSlices;
-	//Rewrite the image with the threshold
-	for( itk::SizeValueType cVal=0; cVal<size[1]; ++cVal )
-	  for( itk::SizeValueType rVal=0; rVal<size[0]; ++rVal )
-	  {
-	    US2ImageType::IndexType fIndex,cIndex;
-	    fIndex[0] = (j*WSz)+rVal; fIndex[1] = (k*WSz)+cVal;
-	    cIndex[0] = (j*WSz)+rVal; cIndex[1] = (k*WSz)+cVal;
-	    itFull.SetIndex( fIndex ); itCFull.SetIndex( cIndex );
-	    if( itFull.Get() < curThr )
-	    {
-	      if( itCFull.Get() != 1 )
-	      {
-	        itCFull.Set( 0 );
-	      }
-	    }
-	    else
-	    {
-	      itCFull.Set( 2 );
-	    }
-	  }
-      }
-/*      if(!(count%25))
-        std::cout<<"Count "<<count++<<"\tTile "<<i<<std::endl<<std::flush;
-      else
-	++count;*/
-  }
   std::cout<<"Done. Copying image."
 	   <<std::endl<<std::flush;
 
@@ -440,14 +309,14 @@ int main(int argc, char *argv[])
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     IterType3d itOut( outputImage, outputImage->GetRequestedRegion() );
-    IterType itCFull( contourImages.at(i), contourImages.at(i)->GetRequestedRegion() );
+    IterType itCFull( threshImages.at(i), threshImages.at(i)->GetRequestedRegion() );
     for( itk::IndexValueType j=0; j<numCol; ++j )
       for( itk::IndexValueType k=0; k<numRow; ++k )
       {
         US2ImageType::IndexType cIndex; cIndex[0] = k; cIndex[1] = j;
 	US3ImageType::IndexType oIndex; oIndex[0] = k; oIndex[1] = j; oIndex[2] = i;
 	itOut.SetIndex( oIndex ); itCFull.SetIndex( cIndex );
-	itOut.Set( itCFull.Get() );
+	itOut.Set( itCFull.Get() ); //Writing out binary type change should be ok
       }
   }
 
@@ -469,8 +338,7 @@ int main(int argc, char *argv[])
   {
     for( itk::IndexValueType i=0; i<numSlices; ++i )
     {
-      meanImages.at(i)->UnRegister();
-      contourImages.at(i)->UnRegister();
+      threshImages.at(i)->UnRegister();
     }
   }
   catch(itk::ExceptionObject &e)
