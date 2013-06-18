@@ -7,6 +7,8 @@ SET( cb_SRCS
   block_b.h   
 )
 
+INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/InsightJournalFilters/MinErrorThresholding )
+
 ADD_LIBRARY( cell_binarization ${cb_SRCS} )
 TARGET_LINK_LIBRARIES ( cell_binarization        ${ITK_LIBRARIES} )
 

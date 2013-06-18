@@ -8,6 +8,7 @@ SET( cbin_SRCS
   GCBinarization/new_graph.h
   GCBinarization/block_b.h   
 )
+INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/InsightJournalFilters/MinErrorThresholding )
 
 ADD_LIBRARY(mdlUtils mdlUtils.h mdlUtils.cpp)
 

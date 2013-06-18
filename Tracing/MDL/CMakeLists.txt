@@ -2,6 +2,7 @@ PROJECT(MDL)
 FIND_PACKAGE( Boost REQUIRED )
 INCLUDE_DIRECTORIES( ${Boost_INCLUDE_DIR} ${Farsight_BINARY_DIR}/Tracing/MDL 
                      ${Farsight_SOURCE_DIR}/Tracing/MDL )
+INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/InsightJournalFilters/MinErrorThresholding )
 SET( cbin_SRCS
   GCBinarization/cell_binarization.h
   GCBinarization/cell_binarization.cpp    
