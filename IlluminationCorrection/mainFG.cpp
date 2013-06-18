@@ -34,15 +34,17 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
-#include "adaptive_binarization.h"
+#define WinSz 50
 
-typedef unsigned short USPixelType;
-typedef unsigned char  UCPixelType;
-const unsigned int     Dimension3 = 3;
-const unsigned int     Dimension2 = 2;
+typedef unsigned short	USPixelType;
+typedef unsigned char	UCPixelType;
+typedef double		CostPixelType;
+const unsigned int	Dimension3 = 3;
+const unsigned int	Dimension2 = 2;
 typedef itk::Image< USPixelType, Dimension3 > US3ImageType;
 typedef itk::Image< UCPixelType, Dimension3 > UC3ImageType;
 typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
+typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 
 void usage( const char *funcName )
 {
@@ -73,130 +75,59 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   currentTile->Register();
 }
 
-void AdaptivelyBinarizeTile( US2ImageType::Pointer InputImage,
-			     US2ImageType::Pointer BinaryImage )
+itk::SizeValueType ComputeHistogram(
+	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
+	std::vector< double > &histogram,
+	US2ImageType::IndexType &start )
 {
-  typedef itk::RegionOfInterestImageFilter< US2ImageType, US2ImageType > ROIFilterType;
-  typedef itk::ConnectedComponentImageFilter< US2ImageType, US2ImageType >
-  								ConnectedComponentFilterType;
-  typedef itk::ImageRegionConstIterator< US2ImageType > BinOutConstIteratorType;
-  typedef itk::ImageRegionIteratorWithIndex< US2ImageType > BinMontageIteratorType;
+  itk::SizeValueType max = 0;
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+  {
+    US2ImageType::SizeType size; size[0] = WinSz; size[1] = WinSz;
+    US2ImageType::RegionType region;
+    region.SetSize( size ); region.SetIndex( start );
+    ConstIterType constIter ( medFiltImages.at(i), region );
+    for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
+      ++histogram[constIter.Get()];
+  }
+  for( itk::SizeValueType i=0; i<histogram.size(); ++i )
+  {
+    if( histogram[i] )
+      max = i;
+    histogram[i] /= (double)WinSz*(double)WinSz;
+  }
+  return max;
+}
 
-  //Redefine some constants
-  itk::SizeValueType TileSizeX = InputImage->GetLargestPossibleRegion().GetSize()[0];
-  itk::SizeValueType TileSizeY = InputImage->GetLargestPossibleRegion().GetSize()[1];
-
-  //Crop Input Image
-  unsigned char *DataPtr;
-  DataPtr = (unsigned char*)malloc( sizeof(unsigned char)*TileSizeX*TileSizeY );
-{ //Scoping for temp cropimage
-    US2ImageType::RegionType CroppedRegion;
-    CroppedRegion.SetSize ( Size );
-    CroppedRegion.SetIndex( Start );
-    ROIFilterType::Pointer CropImageFilter = ROIFilterType::New();
-    CropImageFilter->SetInput( InputImage );
-    CropImageFilter->SetRegionOfInterest( CroppedRegion );
-    try{ CropImageFilter->Update(); }
-    catch( itk::ExceptionObject & excp )
-    {
-      std::cerr <<  "Extraction for binarization failed" << excp << std::endl;
-    }
-#if 0
-  typedef itk::ImageFileWriter< US2ImageType > BinaryWriterType1;
-  BinaryWriterType1::Pointer binwriter1 = BinaryWriterType1::New();
-  binwriter1->SetInput( CropImageFilter->GetOutput() );
-  std::stringstream filess1;
-  filess1 << Start[0] << "_" <<Start[1] << "_" << Start[2];
-  std::string OutFile1 = TempFolder + "/Temp_" + filess1.str() + "_crop.tif" ;
-  binwriter1->SetFileName( OutFile1.c_str() );
-  try{ binwriter1->Update(); }
-  catch( itk::ExceptionObject & excp ){ std::cerr << excp << std::endl; }
+void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
+		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
+		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts )
+{
+  itk::IndexValueType numCol = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  itk::IndexValueType numRow = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  itk::IndexValueType WinSz2 = (itk::IndexValueType)std::round(((double)WinSz)/2-0.5);
+#ifdef _OPENMP
+  #pragma omp parallel for
 #endif
-    BinMontageIteratorType PixBuf(  CropImageFilter->GetOutput(),
-    				CropImageFilter->GetOutput()->GetLargestPossibleRegion() );
-    itk::SizeValueType Index = 0;
-    for( PixBuf.GoToBegin(); !PixBuf.IsAtEnd(); ++PixBuf )
-    {
-      DataPtr[Index] = PixBuf.Get();
-      ++Index;
-    }
-} //End scoping for temp cropimage
-
-  //Create binarization object
-  ftk::NuclearSegmentation * newNucSeg = new ftk::NuclearSegmentation();
-
-  //Read Parameters
-  for(int i=0; i<(int)definition->nuclearParameters.size(); ++i)
-    newNucSeg->SetParameter(	definition->nuclearParameters.at(i).name,
-				int(definition->nuclearParameters.at(i).value) );
-
-  //Convert input image to FTKImage
-  ftk::Image::Pointer FTKIImage = ftk::Image::New();
-  std::vector<unsigned char> color;
-  color.assign(3,255);
-  FTKIImage->AppendChannelFromData3D( (void*)DataPtr,
-					itk::ImageIOBase::UCHAR, sizeof(unsigned char),
-					Size[0], Size[1], Size[2], "nuc", color, false );
-  newNucSeg->SetInput( FTKIImage, "nuc", 0 );
-
-  //Run Binarization
-  newNucSeg->Binarize(true);
-
-  //Get Output
-  ftk::Image::Pointer FTKOImage = newNucSeg->GetLabelImage();
-  US2ImageType::Pointer BinIm = FTKOImage->
-					GetItkPtr< US2ImageType::PixelType >( 0, 0, ftk::Image::DEFAULT );
-
-  //Check if the tile has more than 3 connected components
-  ConnectedComponentFilterType::Pointer connectedComponentFilter = ConnectedComponentFilterType::New();
-  connectedComponentFilter->SetInput( BinIm );
-  connectedComponentFilter->FullyConnectedOn();
-  try
-  {
-    connectedComponentFilter->Update();
-  }
-  catch( itk::ExceptionObject & excp )
-  {
-    std::cerr <<  "CC filter for initial binarization failed" << excp << std::endl;
-  }
-
-  //Tiles with only background usually have 1-3 CCs
-  if( connectedComponentFilter->GetObjectCount() > 3  )
-  {
-    BinOutConstIteratorType BinOutConstIter( BinIm, BinIm->GetLargestPossibleRegion() );
-    BinMontageIteratorType BinMontagIter( BinaryImage, BinaryImage->GetLargestPossibleRegion() );
-
-    //Copy output of tile into montage
-    for( itk::SizeValueType k=Start[2]; k<numStacks; ++k )
-      for( itk::SizeValueType l=Start[1]; l<(Start[1]+TileSize); ++l )
-        for( itk::SizeValueType m=Start[0]; m<(Start[0]+TileSize); ++m )
-        {
-	  US2ImageType::IndexType FtkBinIndex;
-	  FtkBinIndex[0] = m-Start[0];
-	  FtkBinIndex[1] = l-Start[1];
-	  FtkBinIndex[2] = k;
-	  US2ImageType::IndexType BinaryImIndex;
-	  BinaryImIndex[0] = m;
-	  BinaryImIndex[1] = l;
-	  BinaryImIndex[2] = k;
-	  BinOutConstIter.SetIndex( FtkBinIndex );
-	  BinMontagIter.SetIndex( BinaryImIndex );
-	  if( BinOutConstIter.Get() )
-	    BinMontagIter.Set( 255 );
-        }
-  }
-#if 0
-  typedef itk::ImageFileWriter< US2ImageType > BinaryWriterType;
-  BinaryWriterType::Pointer binwriter = BinaryWriterType::New();
-  binwriter->SetInput( BinIm );
-  std::stringstream filess;
-  filess << Start[0] << "_" <<Start[1] << "_" << Start[2];
-  std::string OutFile = TempFolder + "/Temp_" + filess.str() + "_Bin.tif" ;
-  binwriter->SetFileName( OutFile.c_str() );
-  try{ binwriter->Update(); }
-  catch( itk::ExceptionObject & excp ){ std::cerr << excp << std::endl; }
 #endif
-  delete newNucSeg;
+  for( itk::IndexValueType i=0; i<numRow; ++i )
+  {
+    for( itk::IndexValueType j=0; j<numCol; ++j )
+    {
+      //Compute histogram at point i,j with window size define WinSz
+      itk::SizeValueType histSize = itk::NumericTraits<US2ImageType::PixelType>::max()+1;
+      std::vector< double > histogram( histSize, 0 );
+      US2ImageType::IndexType start; start[0] = numRow-WinSz-1; start[1] = numCol-WinSz-1;
+      if( (i-WinSz2)<0 ) start[0] = 0; if( (j-WinSz2)<0 ) start[1] = 0;
+      if( start[0] && ((i+WinSz2+1)<numRow) ) start[0] = i-WinSz2;
+      if( start[1] && ((j+WinSz2+1)<numCol) ) start[1] = j-WinSz2;
+      itk::SizeValueType max = ComputeHistogram( medFiltImages, histogram, start );
+      US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
+      ComputeCostsFromHist( curPoint, &medFiltImages, autoFlourCosts, flourCosts );
+    }
+  }
+  return;
 }
 
 int main(int argc, char *argv[])
@@ -231,6 +162,7 @@ int main(int argc, char *argv[])
     std::cerr << e << std::endl;
     exit( EXIT_FAILURE );
   }
+
   US3ImageType::Pointer inputImage = reader->GetOutput();
 
   itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
@@ -239,8 +171,8 @@ int main(int argc, char *argv[])
 
   std::cout<<"Number of slices:"<<numSlices<<std::endl;
 
-  std::vector< itk::SmartPointer<US2ImageType> > threshImages;
-  threshImages.resize( numSlices );
+  std::vector< itk::SmartPointer<US2ImageType> > medFiltImages;
+  medFiltImages.resize( numSlices );
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -253,12 +185,10 @@ int main(int argc, char *argv[])
   {
     US2ImageType::Pointer currentSlice;
     GetTile( currentSlice, inputImage, (unsigned)i );
-
     //Median filter for each slice to remove thermal noise
     MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
-    medFilter->SetRadius( 5 );
-
+    medFilter->SetRadius( 3 );
     try
     {
       medFilter ->Update();
@@ -269,16 +199,45 @@ int main(int argc, char *argv[])
       exit (EXIT_FAILURE);
     }
     US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
-    US2ImageType::Pointer thresholdIm;
-
-    AdaptivelyBinarizeTile( medFiltIm, thresholdIm );
-    thresholdIm->Register();
-    
-    threshImages.at(i) = thresholdIm;
+    medFiltIm->Register();
+    medFiltImages.at(i) = medFiltIm;
+    currentSlice->UnRegister();
   }
 
-  std::cout<<"Done. Copying image."
-	   <<std::endl<<std::flush;
+  std::cout<<"Done! Computing Costs\n"<<std::flush;
+
+  //Allocate two images of double to store the auto-flour and the flour costs
+  std::vector< itk::SmartPointer<CostImageType> > autoFlourCosts, flourCosts;
+  autoFlourCosts.resize( numSlices );
+  flourCosts.resize( numSlices );
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1)
+#else
+  #pragma omp parallel for
+#endif
+#endif
+  for( itk::IndexValueType i=0; i<numSlices; ++i )
+  {
+    CostImageType::Pointer costs1 = CostImageType::New();
+    CostImageType::Pointer costs2 = CostImageType::New();
+    CostImageType::PointType origin;	origin[0] = 0;	  origin[1] = 0;
+    CostImageType::IndexType start;	start[0] = 0;	  start[1] = 0;
+    CostImageType::SizeType size;	size[0] = numRow; size[1] = numCol;
+    CostImageType::RegionType region;
+    region.SetSize( size ); region.SetIndex( start );
+    costs1->SetOrigin( origin );	costs2->SetOrigin( origin );
+    costs1->SetRegions( region );	costs2->SetRegions( region );
+    costs1->Allocate();			costs2->Allocate();
+    costs1->FillBuffer(0);		costs2->FillBuffer(0);
+    costs1->Update();			costs2->Update();
+    costs1->Register();			costs2->Register();
+    autoFlourCosts.at(i) = costs1; 	flourCosts.at(i) = costs2;
+  }
+
+  ComputeCosts( medFiltImages, autoFlourCosts, flourCosts );
+
+
 
   //Copy into 3d image
   US3ImageType::Pointer outputImage = US3ImageType::New();
