@@ -109,9 +109,9 @@ itk::SizeValueType ComputeHistogram(
   {
     for( itk::SizeValueType j=0; j<valsPerBin; ++j )
       histogram.at(i) += histogramInternal.at(i*valsPerBin+j);
-    if( i==(NumBins-1) )
-      for( itk::SizeValueType j=0; j<overFlow; ++j )
-	histogram.at(i) += histogramInternal.at(i+1*valsPerBin+j);
+//    if( i==(NumBins-1) )
+//      for( itk::SizeValueType j=0; j<overFlow; ++j )
+//	histogram.at(i) += histogramInternal.at(i+1*valsPerBin+j);
     histogram.at(i) /= ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
     sum += histogram.at(i);
   }
@@ -178,11 +178,11 @@ void computePoissonParams( std::vector< double > &histogram,
       if( J<min_J )
       {
         min_J = J;
-        parameters.at(0) = U0;
-        parameters.at(1) = U1;
-        parameters.at(2) = U2; //Just a negative number to let the program knows that two levels will be used
-        parameters.at(3) = P0;
-        parameters.at(4) = P1;
+        parameters.at(0) = U0; //Lowest mean
+        parameters.at(1) = U1; //Intermediate mean
+        parameters.at(2) = U2; //Highest mean
+        parameters.at(3) = P0; //Prior for the lowest
+        parameters.at(4) = P1; //Prior for the intermediate, highest will be 1-(P0+P1)
       }
     }
   }
@@ -242,46 +242,35 @@ void computePoissonParams( std::vector< double > &histogram,
   return;
 }
 
-void ComputeCostsFromHist( US2ImageType::IndexType &curPoint,
-	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
-	std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
-	std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
-	std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
-	std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
-	std::vector< double > &histogram, itk::SizeValueType &max )
+double ComputePoissonProbability( double intensity, double alpha )
 {
-  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
-  typedef itk::ImageRegionIterator< CostImageType > CostIterType;
-#ifdef DBGG
-  std::cout<<"computing costs from hist\n"<<std::flush;
-#endif //DBGG
-  std::vector< double > parameters( 5, 0 );
-  computePoissonParams( histogram, parameters );
-  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+  double A, P;
+  A = exp(-alpha);
+  P = 1;
+  double epsThresh = std::numeric_limits<double>::epsilon()*2;
+  for( itk::SizeValueType i=1; i<= intensity; ++i )
   {
-    US2ImageType::SizeType size; size[0] = 1; size[1] = 1;
-    US2ImageType::RegionType region;
-    region.SetSize( size ); region.SetIndex( curPoint );
-    ConstIterType constIter ( medFiltImages.at(i), region );
-    CostIterType costIterFlour		( flourCosts.at(i),	region );
-    CostIterType costIterFlourBG	( flourCostsBG.at(i),	region );
-    CostIterType costIterAutoFlour	( autoFlourCosts.at(i),	region );
-    CostIterType costIterAutoFlourBG	( autoFlourCostsBG.at(i),region );
-    constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
-    costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
-    US2ImageType::PixelType curPix = constIter.Get();
-    
+    P = P * (alpha/i);
+    if( P < epsThresh )
+    {
+      P = std::numeric_limits<double>::epsilon();
+      break;
+    }
   }
-
-  return;
+  P *= A;
+  if( P < std::numeric_limits<double>::epsilon() )
+    P = std::numeric_limits<double>::epsilon();
+  return P;
 }
 
 void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts
+		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsFG )
+		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG )
 {
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  typedef itk::ImageRegionIterator< CostImageType > CostIterType;
   itk::IndexValueType numCol = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
   itk::IndexValueType numRow = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
   itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5);
@@ -302,9 +291,59 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
       US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
 #ifdef DBGG
       std::cout<<"histogram computed for " << curPoint << "\n" << std::flush;
+      std::cout<<"computing costs from hist\n"<<std::flush;
 #endif //DBGG
-      ComputeCostsFromHist( curPoint, medFiltImages, autoFlourCosts,
-      			    flourCosts, histogram, max );
+      std::vector< double > parameters( 5, 0 );
+      computePoissonParams( histogram, parameters );
+      //Fix the params
+      double ratio = ((double)max)/((double)histogram.size());
+      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
+      for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+      {
+       	//Declare iterators for the four images
+	US2ImageType::SizeType size; size[0] = 1; size[1] = 1;
+	US2ImageType::RegionType region;
+	region.SetSize( size ); region.SetIndex( curPoint );
+	ConstIterType constIter ( medFiltImages.at(i), region );
+	CostIterType costIterFlour	( flourCosts.at(i),	region );
+	CostIterType costIterFlourBG	( flourCostsBG.at(i),	region );
+	CostIterType costIterAutoFlour	( autoFlourCosts.at(i),	region );
+	CostIterType costIterAutoFlourBG( autoFlourCostsBG.at(i),region );
+	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
+	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
+	US2ImageType::PixelType curPix = constIter.Get();
+
+	//Compute node costs for each type
+	double AF, AFBG, F, FBG;
+	if( curPix >= parameters.at(2) )
+	  F  = 	(1 - ( parameters.at(3) + parameters.at(4) ) ) * 
+	  	ComputePoissonProbability( parameters.at(2), parameters.at(2) );
+	else
+	  F  =	(1-(parameters.at(3)+parameters.at(4))) *
+	  	ComputePoissonProbability( parameters.at(2), ((double)curPix) );
+	if( curPix >= parameters.at(1) )
+	  AF =	F + ( parameters.at(4) ) *	//Easier to estimate AF+F and sub F later
+	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) );
+	else
+	  AF =	F + ( parameters.at(4) ) *
+	  	ComputePoissonProbability( parameters.at(1), ((double)curPix) );
+	if( curPix <= parameters.at(0) )
+	  AFBG = parameters.at(3) *
+	  	ComputePoissonProbability( parameters.at(0), parameters.at(0) );
+	else
+	  AFBG = parameters.at(3) *
+	  	ComputePoissonProbability( parameters.at(0), ((double)curPix) );
+	if( curPix <= parameters.at(1) )
+	  FBG = parameters.at(4) *
+	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) ) + AFBG;
+	else
+	  FBG = parameters.at(4) *
+	  	ComputePoissonProbability( parameters.at(1), ((double)curPix) ) + AFBG;
+
+	costIterFlour.Set( F ); 	costIterAutoFlour.Set( AF );
+	costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
+
+      }
     }
   }
   return;
@@ -320,8 +359,8 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
 
-  std::string inputImageName  = argv[1]; //Just In case..
-  std::string outputImageName = argv[2]; //Name of the input image
+  std::string inputImageName  = argv[1]; //Name of the input image
+  std::string outputImageName = argv[2];
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::ImageFileWriter< US3ImageType >    WriterType;
@@ -387,29 +426,29 @@ int main(int argc, char *argv[])
     medFiltImages.at(i) = medFiltIm;
     currentSlice->UnRegister();
     //Allocate space for costs
-      CostImageType::Pointer costs1 = CostImageType::New();
-      CostImageType::Pointer costs2 = CostImageType::New();
-      CostImageType::Pointer costs3 = CostImageType::New();
-      CostImageType::Pointer costs4 = CostImageType::New();
-      CostImageType::PointType origin;	origin[0] = 0;	  origin[1] = 0;
-      CostImageType::IndexType start;	start[0] = 0;	  start[1] = 0;
-      CostImageType::SizeType size;	size[0] = numRow; size[1] = numCol;
-      CostImageType::RegionType region;
-      region.SetSize( size ); region.SetIndex( start );
-      costs1->SetOrigin( origin );	costs2->SetOrigin( origin );
-      costs3->SetOrigin( origin );	costs4->SetOrigin( origin );
-      costs1->SetRegions( region );	costs2->SetRegions( region );
-      costs3->SetRegions( region );	costs4->SetRegions( region );
-      costs1->Allocate();		costs2->Allocate();
-      costs3->Allocate();		costs4->Allocate();
-      costs1->FillBuffer(0);		costs2->FillBuffer(0);
-      costs3->FillBuffer(0);		costs4->FillBuffer(0);
-      costs1->Update();			costs2->Update();
-      costs3->Update();			costs4->Update();
-      costs1->Register();		costs2->Register();
-      costs3->Register();		costs4->Register();
-      autoFlourCosts.at(i)   = costs1; 	flourCosts.at(i)   = costs2;
-      autoFlourCostsBG.at(i) = costs3; 	flourCostsBG.at(i) = costs4;
+    CostImageType::Pointer costs1 = CostImageType::New();
+    CostImageType::Pointer costs2 = CostImageType::New();
+    CostImageType::Pointer costs3 = CostImageType::New();
+    CostImageType::Pointer costs4 = CostImageType::New();
+    CostImageType::PointType origin;	origin[0] = 0;	  origin[1] = 0;
+    CostImageType::IndexType start;	start[0] = 0;	  start[1] = 0;
+    CostImageType::SizeType size;	size[0] = numRow; size[1] = numCol;
+    CostImageType::RegionType region;
+    region.SetSize( size ); region.SetIndex( start );
+    costs1->SetOrigin( origin );	costs2->SetOrigin( origin );
+    costs3->SetOrigin( origin );	costs4->SetOrigin( origin );
+    costs1->SetRegions( region );	costs2->SetRegions( region );
+    costs3->SetRegions( region );	costs4->SetRegions( region );
+    costs1->Allocate();		costs2->Allocate();
+    costs3->Allocate();		costs4->Allocate();
+    costs1->FillBuffer(0);		costs2->FillBuffer(0);
+    costs3->FillBuffer(0);		costs4->FillBuffer(0);
+    costs1->Update();			costs2->Update();
+    costs3->Update();			costs4->Update();
+    costs1->Register();		costs2->Register();
+    costs3->Register();		costs4->Register();
+    autoFlourCosts.at(i)   = costs1; 	flourCosts.at(i)   = costs2;
+    autoFlourCostsBG.at(i) = costs3; 	flourCostsBG.at(i) = costs4;
   }
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
