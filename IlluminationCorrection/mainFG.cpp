@@ -13,7 +13,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-#define DBGG
+//#define DBGG
 
 #include <vector>
 #include <string>
@@ -36,8 +36,8 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
-#define WinSz 50
-#define NumBins 1000
+#define WinSz 50	//Histogram computed on this window
+#define NumBins 1024	//Downsampled to these number of bins
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -113,10 +113,12 @@ itk::SizeValueType ComputeHistogram(
 //      for( itk::SizeValueType j=0; j<overFlow; ++j )
 //	histogram.at(i) += histogramInternal.at(i+1*valsPerBin+j);
     histogram.at(i) /= ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
+#ifdef DBGG
     sum += histogram.at(i);
   }
-#ifdef DBGG
   std::cout<<"Sum:"<<sum<<std::endl;
+#else
+  }
 #endif //DBGG
   if( valsPerBin )
     max = valsPerBin*NumBins - 1;
@@ -127,7 +129,9 @@ void computePoissonParams( std::vector< double > &histogram,
 			   std::vector< double > &parameters )
 {
   itk::SizeValueType max = histogram.size()-1;
+#ifdef DBGG
   std::cout<<"computing pos params with max " << max << "\n" << std::flush;
+#endif
   //The three-level min error thresholding algorithm
   double min_J = DBL_MAX;
   double P0, U0, P1, U1, P2, U2, U, J;
@@ -295,9 +299,10 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
 #endif //DBGG
       std::vector< double > parameters( 5, 0 );
       computePoissonParams( histogram, parameters );
-      //Fix the params
-      double ratio = ((double)max)/((double)histogram.size());
-      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
+//      //Fix the params
+//      double ratio = ((double)max)/((double)histogram.size());
+//      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
+      double ratio = ((double)histogram.size())/((double)max);
       for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
       {
        	//Declare iterators for the four images
@@ -311,41 +316,62 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
 	CostIterType costIterAutoFlourBG( autoFlourCostsBG.at(i),region );
 	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
 	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
-	US2ImageType::PixelType curPix = constIter.Get();
+	double currentPixel = ((double)constIter.Get())*ratio;
 
 	//Compute node costs for each type
 	double AF, AFBG, F, FBG;
-	if( curPix >= parameters.at(2) )
-	  F  = 	(1 - ( parameters.at(3) + parameters.at(4) ) ) * 
+	if( currentPixel >= parameters.at(2) )
+	  F  = 	( 1 - ( parameters.at(3) + parameters.at(4) ) ) * 
 	  	ComputePoissonProbability( parameters.at(2), parameters.at(2) );
 	else
-	  F  =	(1-(parameters.at(3)+parameters.at(4))) *
-	  	ComputePoissonProbability( parameters.at(2), ((double)curPix) );
-	if( curPix >= parameters.at(1) )
-	  AF =	F + ( parameters.at(4) ) *	//Easier to estimate AF+F and sub F later
+	  F  =	( 1-(parameters.at(3)+parameters.at(4))) *
+	  	ComputePoissonProbability( parameters.at(2), currentPixel );
+	if( currentPixel >= parameters.at(1) )
+	  AF =	F + ( parameters.at(4) ) *	//Easier to estimate AF+F and sub F after cuts
 	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) );
 	else
 	  AF =	F + ( parameters.at(4) ) *
-	  	ComputePoissonProbability( parameters.at(1), ((double)curPix) );
-	if( curPix <= parameters.at(0) )
+	  	ComputePoissonProbability( parameters.at(1), currentPixel );
+	if( currentPixel <= parameters.at(0) )
 	  AFBG = parameters.at(3) *
 	  	ComputePoissonProbability( parameters.at(0), parameters.at(0) );
 	else
 	  AFBG = parameters.at(3) *
-	  	ComputePoissonProbability( parameters.at(0), ((double)curPix) );
-	if( curPix <= parameters.at(1) )
+	  	ComputePoissonProbability( parameters.at(0), currentPixel );
+	if( currentPixel <= parameters.at(1) )
 	  FBG = parameters.at(4) *
 	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) ) + AFBG;
 	else
 	  FBG = parameters.at(4) *
-	  	ComputePoissonProbability( parameters.at(1), ((double)curPix) ) + AFBG;
-
+	  	ComputePoissonProbability( parameters.at(1), currentPixel ) + AFBG;
+	if( currentPixel < 1 )
+	{
+	  FBG = AFBG = 10000.0;
+	  F   =  AF  = 0;
+	}
+	else if( currentPixel > max )
+	{
+	  FBG = AFBG = 0;
+	  F   =  AF  = 10000.0;
+	}
+	else
+	{
+	  F    = -log( F    ); if( F    > 10000.0 ) F    = 10000.0;
+	  AF   = -log( AF   ); if( AF   > 10000.0 ) AF   = 10000.0;
+	  FBG  = -log( FBG  ); if( FBG  > 10000.0 ) FBG  = 10000.0;
+	  AFBG = -log( AFBG ); if( AFBG > 10000.0 ) AFBG = 10000.0;
+	}
 	costIterFlour.Set( F ); 	costIterAutoFlour.Set( AF );
 	costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
-
       }
     }
   }
+  return;
+}
+
+void CastNWriteImage( itk::SmartPointer<CostImageType> inputImage, std::string outFileName )
+{
+  //****************************Fill
   return;
 }
 
@@ -457,6 +483,22 @@ int main(int argc, char *argv[])
   				autoFlourCostsBG, flourCostsBG );
 
   std::cout<<"Done! Computing Cuts\n"<<std::flush;
+
+#ifdef DBGG
+  for( itk::IndexValueType i=0; i<numSlices; ++i )
+  {
+    std::stringstream filess1;
+    filess1 << std::setfill('0') << std::setw(3) << i;
+    std::string OutFile1 = "costImage1_" + filess1.str() + ".tif" ;  
+    std::string OutFile2 = "costImage2_" + filess2.str() + ".tif" ;  
+    std::string OutFile3 = "costImage3_" + filess3.str() + ".tif" ;  
+    std::string OutFile4 = "costImage4_" + filess4.str() + ".tif" ;  
+    CastNWriteImage( autoFlourCosts.at(i), OutFile1 );
+    CastNWriteImage( autoFlourCostsBG.at(i), OutFile2 );
+    CastNWriteImage( flourCosts.at(i). OutFile3 );
+    CastNWriteImage( flourCostsBG.at(i). OutFile4 );
+  }
+#endif //DBGG
 
   //Copy into 3d image
   US3ImageType::Pointer outputImage = US3ImageType::New();
