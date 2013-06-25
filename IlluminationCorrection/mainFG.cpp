@@ -13,7 +13,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-//#define DBGG
+#define DBGGG
 
 #include <vector>
 #include <string>
@@ -21,6 +21,10 @@
 #include <sstream>
 #include <iomanip>
 #include <float.h>
+
+#ifdef _OPENMP
+#include "omp.h"
+#endif
 
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -36,7 +40,8 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
-#define WinSz 50	//Histogram computed on this window
+#define WinSz 100	//Histogram computed on this window
+#define CWin  25	//This is the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 
 typedef unsigned short	USPixelType;
@@ -212,6 +217,7 @@ void computePoissonParams( std::vector< double > &histogram,
     }
     U0 /= P0;
 
+//#ifdef DBGG
     for( itk::SizeValueType j=i+1; j<max; ++j )//to set the second threshold
     {
       //compute the current parameters of the second component
@@ -233,9 +239,10 @@ void computePoissonParams( std::vector< double > &histogram,
       if( J<min_J )
       {
         std::cout<<"This image does not need 3 level separation!\n";
-        throw;
+//        throw;
       }
     }
+//#endif
   }
 #ifdef DBGG
   std::cout<<"Parameters2: ";
@@ -245,135 +252,301 @@ void computePoissonParams( std::vector< double > &histogram,
 #endif //DBGG
   return;
 }
-
-double ComputePoissonProbability( double intensity, double alpha )
+//Intialize pdf vector with max_intensity+1, 1
+void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
 {
-  double A, P;
+  double A;
   A = exp(-alpha);
-  P = 1;
+  pdf.at(0) = 1.0;
   double epsThresh = std::numeric_limits<double>::epsilon()*2;
-  for( itk::SizeValueType i=1; i<= intensity; ++i )
+  for( itk::SizeValueType i=1; i<pdf.size(); ++i )
   {
-    P = P * (alpha/i);
-    if( P < epsThresh )
+    pdf.at(i) = pdf.at(i-1);
+    pdf.at(i) = pdf.at(i) * (alpha/((double)i));
+    if( pdf.at(i) < epsThresh )
     {
-      P = std::numeric_limits<double>::epsilon();
+      //Sine the full interval should not be more than 0-10^3
+      pdf.at(i) = std::numeric_limits<double>::epsilon();
+      for( itk::SizeValueType j=i+1; j<pdf.size(); ++j )
+	pdf.at(j) = std::numeric_limits<double>::epsilon();
       break;
     }
   }
-  P *= A;
-  if( P < std::numeric_limits<double>::epsilon() )
-    P = std::numeric_limits<double>::epsilon();
-  return P;
+  for( itk::SizeValueType i=0; i<pdf.size(); ++i )
+  {
+    pdf.at(i) *= A;
+    if( pdf.at(i) < std::numeric_limits<double>::epsilon() )
+      pdf.at(i) = std::numeric_limits<double>::epsilon();
+  }
+  return;
 }
 
 void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG )
+		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG
+#ifdef DBGGG
+, std::vector< itk::SmartPointer<US2ImageType> > &resacledImages
+#endif //DBGGG
+		   )
 {
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIterator< CostImageType > CostIterType;
   itk::IndexValueType numCol = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
   itk::IndexValueType numRow = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
-  itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5);
+  itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5)
+			      -(itk::IndexValueType)floor(((double)CWin)/2+0.5);
+
+#ifdef DBGGG
+  unsigned count = 0;
+  clock_t start_time = clock();
+#endif //DBGGG
+
 #ifdef _OPENMP
   #pragma omp parallel for
 #endif
-  for( itk::IndexValueType i=0; i<numRow; ++i )
+  for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
-    for( itk::IndexValueType j=0; j<numCol; ++j )
+    for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
       //Compute histogram at point i,j with window size define WinSz
       std::vector< double > histogram( NumBins, 0 );
-      US2ImageType::IndexType start; start[0] = numRow-WinSz-1; start[1] = numCol-WinSz-1;
-      if( (i-WinSz2)<0 ) start[0] = 0; if( (j-WinSz2)<0 ) start[1] = 0;
-      if( start[0] && ((i+WinSz2+1)<numRow) ) start[0] = i-WinSz2;
-      if( start[1] && ((j+WinSz2+1)<numCol) ) start[1] = j-WinSz2;
+      US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
+      if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
+      if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
+      if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
       itk::SizeValueType max = ComputeHistogram( medFiltImages, histogram, start );
       US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
-#ifdef DBGG
-      std::cout<<"histogram computed for " << curPoint << "\n" << std::flush;
-      std::cout<<"computing costs from hist\n"<<std::flush;
-#endif //DBGG
       std::vector< double > parameters( 5, 0 );
       computePoissonParams( histogram, parameters );
+      std::vector< double > pdf0( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(0), pdf0 );
+      std::vector< double > pdf1( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(1), pdf1 );
+      std::vector< double > pdf2( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(2), pdf2 );
+#ifdef DBGGG
+      if( !omp_get_thread_num() )
+      {
+	std::cout << "histogram computed for " << curPoint << "\t" ;
+	std::cout << "computing costs from hist\t";
+	std::cout << "Time: " << (clock()-start_time)/((float)CLOCKS_PER_SEC) << "\n";
+	start_time = clock();
+//	std::cout << "pdf sizes: " << pdf0.size() << "\t" << pdf1.size() << "\t" << pdf2.size()
+//		  << std::endl << std::flush;
+      }
+#endif //DBGGG
 //      //Fix the params
 //      double ratio = ((double)max)/((double)histogram.size());
 //      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
       double ratio = ((double)histogram.size())/((double)max);
-      for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+      for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
       {
-       	//Declare iterators for the four images
-	US2ImageType::SizeType size; size[0] = 1; size[1] = 1;
+	//Declare iterators for the four images
+	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
+	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
+	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
 	US2ImageType::RegionType region;
 	region.SetSize( size ); region.SetIndex( curPoint );
-	ConstIterType constIter ( medFiltImages.at(i), region );
-	CostIterType costIterFlour	( flourCosts.at(i),	region );
-	CostIterType costIterFlourBG	( flourCostsBG.at(i),	region );
-	CostIterType costIterAutoFlour	( autoFlourCosts.at(i),	region );
-	CostIterType costIterAutoFlourBG( autoFlourCostsBG.at(i),region );
+	ConstIterType constIter ( medFiltImages.at(k), region );
+	CostIterType costIterFlour	( flourCosts.at(k),	region );
+	CostIterType costIterFlourBG	( flourCostsBG.at(k),	region );
+	CostIterType costIterAutoFlour	( autoFlourCosts.at(k),	region );
+	CostIterType costIterAutoFlourBG( autoFlourCostsBG.at(k),region );
 	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
 	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
-	double currentPixel = ((double)constIter.Get())*ratio;
+#ifdef DBGGG
+	typedef itk::ImageRegionIterator< US2ImageType > IterType;
+	IterType rescaleIter ( resacledImages.at(k), region );
+	rescaleIter.GoToBegin();
+#endif //DBGGG
 
-	//Compute node costs for each type
-	double AF, AFBG, F, FBG;
-	if( currentPixel >= parameters.at(2) )
-	  F  = 	( 1 - ( parameters.at(3) + parameters.at(4) ) ) * 
-	  	ComputePoissonProbability( parameters.at(2), parameters.at(2) );
-	else
-	  F  =	( 1-(parameters.at(3)+parameters.at(4))) *
-	  	ComputePoissonProbability( parameters.at(2), currentPixel );
-	if( currentPixel >= parameters.at(1) )
-	  AF =	F + ( parameters.at(4) ) *	//Easier to estimate AF+F and sub F after cuts
-	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) );
-	else
-	  AF =	F + ( parameters.at(4) ) *
-	  	ComputePoissonProbability( parameters.at(1), currentPixel );
-	if( currentPixel <= parameters.at(0) )
-	  AFBG = parameters.at(3) *
-	  	ComputePoissonProbability( parameters.at(0), parameters.at(0) );
-	else
-	  AFBG = parameters.at(3) *
-	  	ComputePoissonProbability( parameters.at(0), currentPixel );
-	if( currentPixel <= parameters.at(1) )
-	  FBG = parameters.at(4) *
-	  	ComputePoissonProbability( parameters.at(1), parameters.at(1) ) + AFBG;
-	else
-	  FBG = parameters.at(4) *
-	  	ComputePoissonProbability( parameters.at(1), currentPixel ) + AFBG;
-	if( currentPixel < 1 )
+	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterFlourBG,
+#ifdef DBGGG
+		++costIterAutoFlour, ++costIterAutoFlourBG, ++rescaleIter )
+#else  //DBGGG
+		++costIterAutoFlour, ++costIterAutoFlourBG )
+#endif //DBGGG
 	{
-	  FBG = AFBG = 10000.0;
-	  F   =  AF  = 0;
-	}
-	else if( currentPixel > max )
-	{
-	  FBG = AFBG = 0;
-	  F   =  AF  = 10000.0;
-	}
-	else
-	{
-	  F    = -log( F    ); if( F    > 10000.0 ) F    = 10000.0;
-	  AF   = -log( AF   ); if( AF   > 10000.0 ) AF   = 10000.0;
-	  FBG  = -log( FBG  ); if( FBG  > 10000.0 ) FBG  = 10000.0;
-	  AFBG = -log( AFBG ); if( AFBG > 10000.0 ) AFBG = 10000.0;
-	}
-	costIterFlour.Set( F ); 	costIterAutoFlour.Set( AF );
-	costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
+	  itk::SizeValueType currentPixel = std::floor( ((double)constIter.Get())*ratio + 0.5 );
+	  if( currentPixel >= pdf0.size() )
+	    currentPixel = pdf0.size()-1;
+#ifdef DBGGG
+	  rescaleIter.Set( currentPixel );
+#endif //DBGGG
+
+	  //Compute node costs for each type
+	  double AF, AFBG, F, FBG;
+	  if( currentPixel >= parameters.at(2) )
+	    F  =  ( 1 - ( parameters.at(3) + parameters.at(4) ) ) * 
+		  pdf2.at( std::floor( parameters.at(2)+0.5 ) );
+	  else
+	    F  =  ( 1-(parameters.at(3)+parameters.at(4))) *
+		  pdf2.at( currentPixel );
+	  if( currentPixel >= parameters.at(1) )
+	    AF =  F + ( parameters.at(4) ) *	//Easier to estimate AF+F and sub F after cuts
+		  pdf1.at( std::floor( parameters.at(1)+0.5 ) );
+	  else
+	    AF =  F + ( parameters.at(4) ) *
+		  pdf1.at( currentPixel );
+	  if( currentPixel <= parameters.at(0) )
+	    AFBG = parameters.at(3) *
+	  	  pdf0.at( std::floor( parameters.at(0)+0.5 ) );
+	  else
+	    AFBG = parameters.at(3) *
+		  pdf0.at( currentPixel );
+	  if( currentPixel <= parameters.at(1) )
+	    FBG = AFBG + parameters.at(4) *
+		  pdf1.at( std::floor( parameters.at(1)+0.5 ) );
+	  else
+	    FBG = AFBG + parameters.at(4) *
+		  pdf1.at( currentPixel );
+	  if( currentPixel < 1 )
+	  {
+	    FBG = AFBG = 10000.0;
+	    F   =  AF  = 0;
+	  }
+	  else if( currentPixel > max )
+	  {
+	    FBG = AFBG = 0;
+	    F   =  AF  = 10000.0;
+	  }
+	  else
+	  {
+	    F    = -log( F    ); if( F    > 10000.0 ) F    = 10000.0;
+	    AF   = -log( AF   ); if( AF   > 10000.0 ) AF   = 10000.0;
+	    FBG  = -log( FBG  ); if( FBG  > 10000.0 ) FBG  = 10000.0;
+	    AFBG = -log( AFBG ); if( AFBG > 10000.0 ) AFBG = 10000.0;
+	  }
+	  costIterFlour.Set( F ); 	costIterAutoFlour.Set( AF );
+	  costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
+        }
       }
     }
+#ifdef DBGG
+    #pragma omp critical
+    {
+      std::cout<<++count<<"\t";
+    }
+#endif //DBGG
+  }
+#ifdef DBGG
+  std::cout<<"\n";
+#endif //DBGG
+
+  return;
+}
+
+#ifdef DBGGG
+void CastNWriteImage( std::vector< itk::SmartPointer<CostImageType> > &inputImage, std::string &outFileName )
+{
+  typedef itk::ImageRegionConstIterator< CostImageType > ConstIterType2d;
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
+  typedef itk::ImageFileWriter< US3ImageType > WriterType;
+  //Allocate space
+  US3ImageType::Pointer outputImage = US3ImageType::New();
+  US3ImageType::PointType origin;
+  origin[0] = 0; origin[1] = 0; origin[2] = 0;
+  outputImage->SetOrigin( origin );
+  US3ImageType::IndexType start;
+  start[0] = 0; start[1] = 0; start[2] = 0;
+  US3ImageType::SizeType size;
+  size[0] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  size[2] = inputImage.size();
+  US3ImageType::RegionType region;
+  region.SetSize( size );
+  region.SetIndex( start );
+  outputImage->SetRegions( region );
+  outputImage->Allocate();
+  outputImage->FillBuffer(0);
+  outputImage->Update();
+
+  //Cast n Write Values
+  bool warningWritten = false;
+  itk::SizeValueType typeMax = itk::NumericTraits<US3ImageType::PixelType>::max();
+  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
+  {
+    //Start index
+    start[2] = i; size[2] = 1; //Reset for writing out the slices
+    CostImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
+    CostImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
+    region.SetSize( size ); region.SetIndex( start );
+    CostImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
+    ConstIterType2d iter2d ( inputImage.at(i), region2d );
+    IterType3d iter3d( outputImage, region );
+    for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
+      iter3d.Set( (itk::SizeValueType)std::floor( iter2d.Get()+0.5 ) );
+  }
+  WriterType::Pointer writer = WriterType::New();
+  writer = WriterType::New();
+  writer->SetFileName( outFileName.c_str() );
+  writer->SetInput( outputImage );
+  try
+  {
+    writer->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
   }
   return;
 }
-
-void CastNWriteImage( itk::SmartPointer<CostImageType> inputImage, std::string outFileName )
+void CastNWriteScaling( std::vector< itk::SmartPointer<US2ImageType> > &inputImage, std::string &outFileName )
 {
-  //****************************Fill
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType2d;
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
+  typedef itk::ImageFileWriter< US3ImageType > WriterType;
+  //Allocate space
+  US3ImageType::Pointer outputImage = US3ImageType::New();
+  US3ImageType::PointType origin;
+  origin[0] = 0; origin[1] = 0; origin[2] = 0;
+  outputImage->SetOrigin( origin );
+  US3ImageType::IndexType start;
+  start[0] = 0; start[1] = 0; start[2] = 0;
+  US3ImageType::SizeType size;
+  size[0] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  size[2] = inputImage.size();
+  US3ImageType::RegionType region;
+  region.SetSize( size );
+  region.SetIndex( start );
+  outputImage->SetRegions( region );
+  outputImage->Allocate();
+  outputImage->FillBuffer(0);
+  outputImage->Update();
+
+  //Cast n Write Values
+  bool warningWritten = false;
+  itk::SizeValueType typeMax = itk::NumericTraits<US2ImageType::PixelType>::max();
+  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
+  {
+    //Start index
+    start[2] = i; size[2] = 1; //Reset for writing out the slices
+    US2ImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
+    US2ImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
+    region.SetSize( size ); region.SetIndex( start );
+    US2ImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
+    ConstIterType2d iter2d ( inputImage.at(i), region2d );
+    IterType3d iter3d( outputImage, region );
+    for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
+      iter3d.Set( (itk::SizeValueType)std::floor( iter2d.Get()+0.5 ) );
+  }
+  WriterType::Pointer writer = WriterType::New();
+  writer = WriterType::New();
+  writer->SetFileName( outFileName.c_str() );
+  writer->SetInput( outputImage );
+  try
+  {
+    writer->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
   return;
 }
+#endif //DBGGG
 
 int main(int argc, char *argv[])
 { 
@@ -422,6 +595,12 @@ int main(int argc, char *argv[])
   medFiltImages.resize( numSlices );
   flourCosts.resize( numSlices );   autoFlourCosts.resize( numSlices );
   flourCostsBG.resize( numSlices ); autoFlourCostsBG.resize( numSlices );
+
+#ifdef DBGGG
+  std::vector< itk::SmartPointer<US2ImageType> > resacledImages;
+  resacledImages.resize( numSlices );
+#endif //DBGGG
+
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -465,40 +644,67 @@ int main(int argc, char *argv[])
     costs3->SetOrigin( origin );	costs4->SetOrigin( origin );
     costs1->SetRegions( region );	costs2->SetRegions( region );
     costs3->SetRegions( region );	costs4->SetRegions( region );
-    costs1->Allocate();		costs2->Allocate();
-    costs3->Allocate();		costs4->Allocate();
+    costs1->Allocate();			costs2->Allocate();
+    costs3->Allocate();			costs4->Allocate();
     costs1->FillBuffer(0);		costs2->FillBuffer(0);
     costs3->FillBuffer(0);		costs4->FillBuffer(0);
-    costs1->Update();			costs2->Update();
-    costs3->Update();			costs4->Update();
-    costs1->Register();		costs2->Register();
-    costs3->Register();		costs4->Register();
-    autoFlourCosts.at(i)   = costs1; 	flourCosts.at(i)   = costs2;
-    autoFlourCostsBG.at(i) = costs3; 	flourCostsBG.at(i) = costs4;
+    try
+    {
+      costs1->Update();	costs2->Update();
+      costs3->Update(); costs4->Update();
+    }
+    catch( itk::ExceptionObject & excep )
+    {
+      std::cerr << "Exception caught !" << excep << std::endl;
+      exit (EXIT_FAILURE);
+    }
+    costs1->Register(); costs2->Register();
+    costs3->Register(); costs4->Register();
+    autoFlourCosts.at(i)   = costs1; flourCosts.at(i)   = costs2;
+    autoFlourCostsBG.at(i) = costs3; flourCostsBG.at(i) = costs4;
+#ifdef DBGGG
+    US2ImageType::Pointer rescIm = US2ImageType::New();
+    rescIm->SetOrigin( origin ); rescIm->SetRegions( region );
+    rescIm->Allocate();		 rescIm->FillBuffer(0);
+    try
+    {
+      rescIm->Update();
+    }
+    catch( itk::ExceptionObject & excep )
+    {
+      std::cerr << "Exception caught !" << excep << std::endl;
+      exit (EXIT_FAILURE);
+    }
+    rescIm->Register();
+    resacledImages.at(i) = rescIm;
+#endif //DBGGG
   }
+#ifdef DBGGG
+#endif //DBGGG
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
   ComputeCosts( medFiltImages, autoFlourCosts, flourCosts,
+#ifdef DBGGG
+  				autoFlourCostsBG, flourCostsBG, resacledImages );
+#else
   				autoFlourCostsBG, flourCostsBG );
+#endif //DBGGG
 
   std::cout<<"Done! Computing Cuts\n"<<std::flush;
 
-#ifdef DBGG
-  for( itk::IndexValueType i=0; i<numSlices; ++i )
-  {
-    std::stringstream filess1;
-    filess1 << std::setfill('0') << std::setw(3) << i;
-    std::string OutFile1 = "costImage1_" + filess1.str() + ".tif" ;  
-    std::string OutFile2 = "costImage2_" + filess2.str() + ".tif" ;  
-    std::string OutFile3 = "costImage3_" + filess3.str() + ".tif" ;  
-    std::string OutFile4 = "costImage4_" + filess4.str() + ".tif" ;  
-    CastNWriteImage( autoFlourCosts.at(i), OutFile1 );
-    CastNWriteImage( autoFlourCostsBG.at(i), OutFile2 );
-    CastNWriteImage( flourCosts.at(i). OutFile3 );
-    CastNWriteImage( flourCostsBG.at(i). OutFile4 );
-  }
-#endif //DBGG
+#ifdef DBGGG
+  std::string OutFiles1 = "costImageF.nrrd";
+  std::string OutFiles2 = "costImageFBG.nrrd";
+  std::string OutFiles3 = "costImageAF.nrrd";
+  std::string OutFiles4 = "costImageAFBG.nrrd";
+  std::string OutFiles5 = "costImageInputResc.nrrd";
+  CastNWriteImage( flourCosts,		OutFiles1 );
+  CastNWriteImage( flourCostsBG,	OutFiles2 );
+  CastNWriteImage( autoFlourCosts,	OutFiles3 );
+  CastNWriteImage( autoFlourCostsBG,	OutFiles4 );
+  CastNWriteScaling( resacledImages,	OutFiles5 );
+#endif //DBGGG
 
   //Copy into 3d image
   US3ImageType::Pointer outputImage = US3ImageType::New();
@@ -518,28 +724,7 @@ int main(int argc, char *argv[])
   outputImage->Allocate();
   outputImage->FillBuffer(0);
   outputImage->Update();
-/*
-#ifdef _OPENMP
-#if _OPENMP >= 200805L
-  #pragma omp parallel for  schedule(dynamic,1)
-#else
-  #pragma omp parallel for
-#endif
-#endif
-  for( itk::IndexValueType i=0; i<numSlices; ++i )
-  {
-    IterType3d itOut( outputImage, outputImage->GetRequestedRegion() );
-    IterType itCFull( threshImages.at(i), threshImages.at(i)->GetRequestedRegion() );
-    for( itk::IndexValueType j=0; j<numCol; ++j )
-      for( itk::IndexValueType k=0; k<numRow; ++k )
-      {
-        US2ImageType::IndexType cIndex; cIndex[0] = k; cIndex[1] = j;
-	US3ImageType::IndexType oIndex; oIndex[0] = k; oIndex[1] = j; oIndex[2] = i;
-	itOut.SetIndex( oIndex ); itCFull.SetIndex( cIndex );
-	itOut.Set( itCFull.Get() ); //Writing out binary type change should be ok
-      }
-  }
-*/
+
   WriterType::Pointer writer = WriterType::New();
   writer = WriterType::New();
   writer->SetFileName( outputImageName.c_str() );
