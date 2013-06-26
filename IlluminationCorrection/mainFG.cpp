@@ -21,6 +21,7 @@
 #include <sstream>
 #include <iomanip>
 #include <float.h>
+#include "new_graph.h"
 
 #ifdef _OPENMP
 #include "omp.h"
@@ -41,7 +42,7 @@
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
 #define WinSz 100	//Histogram computed on this window
-#define CWin  25	//This is the inner window
+#define CWin  26	//This is the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 
 typedef unsigned short	USPixelType;
@@ -57,7 +58,7 @@ typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage OutputImage\n";
+	    << " " << funcName << " InputImage OutputImage NumberOfThreads(Optional-default=24)\n";
 }
 
 void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, unsigned i )
@@ -217,7 +218,7 @@ void computePoissonParams( std::vector< double > &histogram,
     }
     U0 /= P0;
 
-//#ifdef DBGG
+#ifdef DBGG
     for( itk::SizeValueType j=i+1; j<max; ++j )//to set the second threshold
     {
       //compute the current parameters of the second component
@@ -242,7 +243,7 @@ void computePoissonParams( std::vector< double > &histogram,
 //        throw;
       }
     }
-//#endif
+#endif
   }
 #ifdef DBGG
   std::cout<<"Parameters2: ";
@@ -281,7 +282,8 @@ void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
   return;
 }
 
-void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
+void ComputeCosts( int numThreads,
+		   std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
@@ -301,10 +303,12 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
 #ifdef DBGGG
   unsigned count = 0;
   clock_t start_time = clock();
+  double ratioMax=0, ratioMin=DBL_MAX;
 #endif //DBGGG
 
 #ifdef _OPENMP
-  #pragma omp parallel for
+  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+  #pragma omp parallel for num_threads(numThreads)
 #endif
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
@@ -323,21 +327,23 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
       std::vector< double > pdf0( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(0), pdf0 );
       std::vector< double > pdf1( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(1), pdf1 );
       std::vector< double > pdf2( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(2), pdf2 );
+//      //Fix the params
+//      double ratio = ((double)max)/((double)histogram.size());
+//      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
+      double ratio = ((double)histogram.size())/((double)max);
 #ifdef DBGGG
+      if( ratio > ratioMax )
+        ratioMax = ratio;
+      if( ratio < ratioMin )
+	ratioMin = ratio;
       if( !omp_get_thread_num() )
       {
 	std::cout << "histogram computed for " << curPoint << "\t" ;
 	std::cout << "computing costs from hist\t";
 	std::cout << "Time: " << (clock()-start_time)/((float)CLOCKS_PER_SEC) << "\n";
 	start_time = clock();
-//	std::cout << "pdf sizes: " << pdf0.size() << "\t" << pdf1.size() << "\t" << pdf2.size()
-//		  << std::endl << std::flush;
       }
 #endif //DBGGG
-//      //Fix the params
-//      double ratio = ((double)max)/((double)histogram.size());
-//      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
-      double ratio = ((double)histogram.size())/((double)max);
       for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
       {
 	//Declare iterators for the four images
@@ -431,7 +437,9 @@ void ComputeCosts( std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImage
 #ifdef DBGG
   std::cout<<"\n";
 #endif //DBGG
-
+#ifdef DBGGG
+  std::cout<<"Ratio max:"<<ratioMax<<"\t\tmin:"<<ratioMin<<std::endl<<std::flush;
+#endif //DBGGG
   return;
 }
 
@@ -548,6 +556,92 @@ void CastNWriteScaling( std::vector< itk::SmartPointer<US2ImageType> > &inputIma
 }
 #endif //DBGGG
 
+void ComputeCut( itk::IndexValueType slice,
+		 std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
+		 std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
+		 std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
+		 US3ImageType::Pointer outputImage,
+		 US3ImageType::PixelType foregroundValue
+		)
+{
+  double sigma = 25.0; //What! A hard coded constant check Boykov's paper!! Also check 20 in weights
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  typedef itk::ImageRegionIteratorWithIndex< US2ImageType > US2IterType;
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > US3IterType;
+  //Compute the number of nodes and edges
+  itk::SizeValueType numRow   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  itk::SizeValueType numCol   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  itk::SizeValueType numNodes = numCol*numRow;
+  itk::SizeValueType numEdges = 3*numCol*numRow /*Down, right and diagonal*/ + 1
+  				- 2*numCol/*No Down At Bottom*/ - 2*numRow/*No Right At Edge*/;
+
+  typedef Graph_B < unsigned, unsigned, unsigned > GraphType;
+  GraphType *graph = new GraphType( numNodes, numEdges );
+  US2IterType medianIter( medFiltImages.at(slice),
+  			  medFiltImages.at(slice)->GetLargestPossibleRegion() );
+  CostIterType AFCostIter( flourCosts.at(slice), 
+  			   flourCosts.at(slice)->GetLargestPossibleRegion() );
+  CostIterType AFBGCostIter( flourCostsBG.at(slice), 
+  			     flourCostsBG.at(slice)->GetLargestPossibleRegion() );
+  //Iterate and add terminal weights
+  for( itk::SizeValueType i=0; i<numRow; ++i )
+  {
+    for( itk::SizeValueType j=0; j<numCol; ++j )
+    {
+      CostImageType::IndexType index; index[0] = i; index[1] = j;
+      AFCostIter.SetIndex( index ); AFBGCostIter.SetIndex( index );
+      itk::SizeValueType indexCurrentNode = i*numCol+j; 
+      graph->add_node();
+      graph->add_tweights( indexCurrentNode, AFCostIter.Get(), AFBGCostIter.Get() );
+    }
+  }
+  for( itk::SizeValueType i=0; i<numRow-1; ++i )
+  {
+    for( itk::SizeValueType j=0; j<numCol-1; ++j )
+    {
+      US2ImageType::IndexType index; index[0] = i; index[1] = j; medianIter.SetIndex( index );
+      double currentVal = medianIter.Get();
+      //Intensity discontinuity terms as edges as done in Yousef's paper
+      itk::SizeValueType indexCurrentNode  = i*numCol+j;
+      itk::SizeValueType indexRightNode    = indexCurrentNode+1;
+      itk::SizeValueType indexBelowNode    = indexCurrentNode+numCol;
+      itk::SizeValueType indexDiagonalNode = indexBelowNode+1;
+      //Right
+      index[0] = i; index[1] = j+1; medianIter.SetIndex( index );
+      double rightCost = 20*exp(-pow(currentVal-medianIter.Get(),2)/(2*pow(sigma,2)));
+      graph->add_edge( indexCurrentNode, indexRightNode, rightCost, rightCost );
+      //Below
+      index[0] = i+1; index[1] = j; medianIter.SetIndex( index );
+      double downCost = 20*exp(-pow(currentVal-medianIter.Get(),2)/(2*pow(sigma,2)));
+      graph->add_edge( indexCurrentNode, indexBelowNode, downCost, downCost );
+      //Diagonal
+      index[0] = i+1; index[1] = j+1; medianIter.SetIndex( index );
+      double diagonalCost = 20*exp(-pow(currentVal-medianIter.Get(),2)/(2*pow(sigma,2)));
+      graph->add_edge( indexCurrentNode, indexDiagonalNode, diagonalCost, diagonalCost );
+    }
+  }
+  //Max flow:
+  graph->maxflow();
+
+  //Iterate and write out the pixels
+  US3ImageType::IndexType start;start[0] = 0;	  start[1] = 0;	    start[2] = slice;
+  US3ImageType::SizeType size;   size[0] = numRow; size[1] = numCol; size[2] = 1;
+  US3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( start );
+  US3IterType outputIter( outputImage, region );
+  for( itk::SizeValueType i=0; i<numRow-1; ++i )
+  {
+    for( itk::SizeValueType j=0; j<numCol-1; ++j )
+    {
+      US3ImageType::IndexType index; index[0] = i; index[1] = j; index[2] = slice;
+      outputIter.SetIndex( index );
+      itk::SizeValueType indexCurrentNode = i*numCol+j;
+      if( graph->what_segment( indexCurrentNode ) != GraphType::SOURCE )
+        outputIter.Set( foregroundValue );
+    }
+  }
+  delete graph;
+}
+
 int main(int argc, char *argv[])
 { 
   if( argc < 3 )
@@ -560,6 +654,9 @@ int main(int argc, char *argv[])
 
   std::string inputImageName  = argv[1]; //Name of the input image
   std::string outputImageName = argv[2];
+  int numThreads = 24;
+  if( argc == 4 )
+    numThreads = atoi( argv[3] );
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::ImageFileWriter< US3ImageType >    WriterType;
@@ -604,7 +701,7 @@ int main(int argc, char *argv[])
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
-  #pragma omp parallel for schedule(dynamic,1)
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
 #else
   #pragma omp parallel for
 #endif
@@ -684,14 +781,12 @@ int main(int argc, char *argv[])
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
-  ComputeCosts( medFiltImages, autoFlourCosts, flourCosts,
+  ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
 #ifdef DBGGG
   				autoFlourCostsBG, flourCostsBG, resacledImages );
 #else
   				autoFlourCostsBG, flourCostsBG );
 #endif //DBGGG
-
-  std::cout<<"Done! Computing Cuts\n"<<std::flush;
 
 #ifdef DBGGG
   std::string OutFiles1 = "costImageF.nrrd";
@@ -724,6 +819,18 @@ int main(int argc, char *argv[])
   outputImage->Allocate();
   outputImage->FillBuffer(0);
   outputImage->Update();
+
+  std::cout<<"Done! Computing Cuts\n"<<std::flush;
+
+#ifdef _OPENMP
+  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+  #pragma omp parallel for num_threads(numThreads)
+#endif
+  for( itk::IndexValueType i=0; i<numSlices; ++i )
+  {
+    ComputeCut( i, medFiltImages, autoFlourCosts, autoFlourCostsBG, outputImage, 1 );
+    ComputeCut( i, medFiltImages, flourCosts, flourCostsBG, outputImage, 2 );
+  }
 
   WriterType::Pointer writer = WriterType::New();
   writer = WriterType::New();
