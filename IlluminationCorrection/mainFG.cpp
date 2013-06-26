@@ -13,7 +13,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-#define DBGGG
+//#define DBGGG
 
 #include <vector>
 #include <string>
@@ -42,7 +42,7 @@
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
 #define WinSz 100	//Histogram computed on this window
-#define CWin  26	//This is the inner window
+#define CWin  32	//This is the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 
 typedef unsigned short	USPixelType;
@@ -61,7 +61,7 @@ void usage( const char *funcName )
 	    << " " << funcName << " InputImage OutputImage NumberOfThreads(Optional-default=24)\n";
 }
 
-void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, unsigned i )
+void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, itk::SizeValueType i )
 {
   typedef itk::ExtractImageFilter< US3ImageType, US2ImageType > DataExtractType;
   DataExtractType::Pointer deFilter = DataExtractType::New();
@@ -360,9 +360,18 @@ void ComputeCosts( int numThreads,
 	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
 	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
 #ifdef DBGGG
+	/****
+	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
+	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
+	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
+	US2ImageType::RegionType region;
+	ConstIterType constIter ( medFiltImages.at(k), region );
+	constIter.GoToBegin();
+	****/
 	typedef itk::ImageRegionIterator< US2ImageType > IterType;
 	IterType rescaleIter ( resacledImages.at(k), region );
 	rescaleIter.GoToBegin();
+/****	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )****/
 #endif //DBGGG
 
 	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterFlourBG,
@@ -372,12 +381,13 @@ void ComputeCosts( int numThreads,
 		++costIterAutoFlour, ++costIterAutoFlourBG )
 #endif //DBGGG
 	{
-	  itk::SizeValueType currentPixel = std::floor( ((double)constIter.Get())*ratio + 0.5 );
+	  itk::SizeValueType currentPixel = (US2ImageType::PixelType)std::floor
+						( ((double)constIter.Get())*ratio + 0.5 );
+#ifdef DBGGG
+	  rescaleIter.Set( constIter.Get() );
+#endif //DBGGG
 	  if( currentPixel >= pdf0.size() )
 	    currentPixel = pdf0.size()-1;
-#ifdef DBGGG
-	  rescaleIter.Set( currentPixel );
-#endif //DBGGG
 
 	  //Compute node costs for each type
 	  double AF, AFBG, F, FBG;
@@ -537,7 +547,7 @@ void CastNWriteScaling( std::vector< itk::SmartPointer<US2ImageType> > &inputIma
     ConstIterType2d iter2d ( inputImage.at(i), region2d );
     IterType3d iter3d( outputImage, region );
     for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
-      iter3d.Set( (itk::SizeValueType)std::floor( iter2d.Get()+0.5 ) );
+      iter3d.Set( iter2d.Get() );
   }
   WriterType::Pointer writer = WriterType::New();
   writer = WriterType::New();
@@ -575,7 +585,7 @@ void ComputeCut( itk::IndexValueType slice,
   itk::SizeValueType numEdges = 3*numCol*numRow /*Down, right and diagonal*/ + 1
   				- 2*numCol/*No Down At Bottom*/ - 2*numRow/*No Right At Edge*/;
 
-  typedef Graph_B < unsigned, unsigned, unsigned > GraphType;
+  typedef Graph_B < double, double, double > GraphType;
   GraphType *graph = new GraphType( numNodes, numEdges );
   US2IterType medianIter( medFiltImages.at(slice),
   			  medFiltImages.at(slice)->GetLargestPossibleRegion() );
@@ -635,8 +645,12 @@ void ComputeCut( itk::IndexValueType slice,
       US3ImageType::IndexType index; index[0] = i; index[1] = j; index[2] = slice;
       outputIter.SetIndex( index );
       itk::SizeValueType indexCurrentNode = i*numCol+j;
-      if( graph->what_segment( indexCurrentNode ) != GraphType::SOURCE )
-        outputIter.Set( foregroundValue );
+      if( graph->what_segment( indexCurrentNode ) == GraphType::SOURCE )
+      {
+        //Do nothing
+      }
+      else
+	outputIter.Set( foregroundValue );
     }
   }
   delete graph;
@@ -713,10 +727,10 @@ int main(int argc, char *argv[])
     //Median filter for each slice to remove thermal noise
     MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
-    medFilter->SetRadius( 3 );
+    medFilter->SetRadius( 5 );
     try
     {
-      medFilter ->Update();
+      medFilter ->Update(); 
     }
     catch( itk::ExceptionObject & excep )
     {
@@ -777,6 +791,8 @@ int main(int argc, char *argv[])
 #endif //DBGGG
   }
 #ifdef DBGGG
+  std::string OutFiles = "costImageMedFilt.nrrd";
+  CastNWriteScaling( medFiltImages, OutFiles );
 #endif //DBGGG
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
@@ -820,17 +836,23 @@ int main(int argc, char *argv[])
   outputImage->FillBuffer(0);
   outputImage->Update();
 
-  std::cout<<"Done! Computing Cuts\n"<<std::flush;
+  std::cout<<"Done! Starting Cuts\n"<<std::flush;
 
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+#else
   #pragma omp parallel for num_threads(numThreads)
+#endif
 #endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     ComputeCut( i, medFiltImages, autoFlourCosts, autoFlourCostsBG, outputImage, 1 );
     ComputeCut( i, medFiltImages, flourCosts, flourCostsBG, outputImage, 2 );
   }
+
+  std::cout<<"Cuts Done! Writing image\n"<<std::flush;
 
   WriterType::Pointer writer = WriterType::New();
   writer = WriterType::New();
