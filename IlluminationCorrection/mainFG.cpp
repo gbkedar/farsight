@@ -58,7 +58,7 @@ typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage OutputImage NumberOfThreads(Optional-default=24)\n";
+	    << " " << funcName << " InputImage OutputImage NumberOfThreads(Optional-default=20)\n";
 }
 
 void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, itk::SizeValueType i )
@@ -570,14 +570,14 @@ void ComputeCut( itk::IndexValueType slice,
 		 std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		 std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
 		 std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
-		 US3ImageType::Pointer outputImage,
-		 US3ImageType::PixelType foregroundValue
+		 UC3ImageType::Pointer outputImage,
+		 UC3ImageType::PixelType foregroundValue
 		)
 {
   double sigma = 25.0; //What! A hard coded constant check Boykov's paper!! Also check 20 in weights
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > US2IterType;
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > US3IterType;
+  typedef itk::ImageRegionIteratorWithIndex< UC3ImageType > UC3IterType;
   //Compute the number of nodes and edges
   itk::SizeValueType numRow   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
   itk::SizeValueType numCol   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
@@ -634,22 +634,18 @@ void ComputeCut( itk::IndexValueType slice,
   graph->maxflow();
 
   //Iterate and write out the pixels
-  US3ImageType::IndexType start;start[0] = 0;	  start[1] = 0;	    start[2] = slice;
-  US3ImageType::SizeType size;   size[0] = numRow; size[1] = numCol; size[2] = 1;
-  US3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( start );
-  US3IterType outputIter( outputImage, region );
+  UC3ImageType::IndexType start;start[0] = 0;	  start[1] = 0;	    start[2] = slice;
+  UC3ImageType::SizeType size;   size[0] = numRow; size[1] = numCol; size[2] = 1;
+  UC3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( start );
+  UC3IterType outputIter( outputImage, region );
   for( itk::SizeValueType i=0; i<numRow-1; ++i )
   {
     for( itk::SizeValueType j=0; j<numCol-1; ++j )
     {
-      US3ImageType::IndexType index; index[0] = i; index[1] = j; index[2] = slice;
+      UC3ImageType::IndexType index; index[0] = i; index[1] = j; index[2] = slice;
       outputIter.SetIndex( index );
       itk::SizeValueType indexCurrentNode = i*numCol+j;
-      if( graph->what_segment( indexCurrentNode ) == GraphType::SOURCE )
-      {
-        //Do nothing
-      }
-      else
+      if( graph->what_segment( indexCurrentNode ) != GraphType::SOURCE )
 	outputIter.Set( foregroundValue );
     }
   }
@@ -668,12 +664,12 @@ int main(int argc, char *argv[])
 
   std::string inputImageName  = argv[1]; //Name of the input image
   std::string outputImageName = argv[2];
-  int numThreads = 24;
+  int numThreads = 20;
   if( argc == 4 )
     numThreads = atoi( argv[3] );
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
-  typedef itk::ImageFileWriter< US3ImageType >    WriterType;
+  typedef itk::ImageFileWriter< UC3ImageType >    WriterType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > IterType;
@@ -818,17 +814,17 @@ int main(int argc, char *argv[])
 #endif //DBGGG
 
   //Copy into 3d image
-  US3ImageType::Pointer outputImage = US3ImageType::New();
-  US3ImageType::PointType origin;
+  UC3ImageType::Pointer outputImage = UC3ImageType::New();
+  UC3ImageType::PointType origin;
   origin[0] = 0; origin[1] = 0; origin[2] = 0;
   outputImage->SetOrigin( origin );
-  US3ImageType::IndexType start;
+  UC3ImageType::IndexType start;
   start[0] = 0; start[1] = 0; start[2] = 0;
-  US3ImageType::SizeType  size;
+  UC3ImageType::SizeType  size;
   size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
   size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
   size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
-  US3ImageType::RegionType region;
+  UC3ImageType::RegionType region;
   region.SetSize( size );
   region.SetIndex( start );
   outputImage->SetRegions( region );
@@ -837,7 +833,7 @@ int main(int argc, char *argv[])
   outputImage->Update();
 
   std::cout<<"Done! Starting Cuts\n"<<std::flush;
-
+  unsigned count = 0;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -850,7 +846,14 @@ int main(int argc, char *argv[])
   {
     ComputeCut( i, medFiltImages, autoFlourCosts, autoFlourCostsBG, outputImage, 1 );
     ComputeCut( i, medFiltImages, flourCosts, flourCostsBG, outputImage, 2 );
+    #pragma omp critical
+    {
+      ++count;
+      if( !( (unsigned)std::floor((double)count*100.0/(double)numSlices)%(unsigned)10 ) )
+	std::cout<<(unsigned)((double)count*100.0/(double)numSlices)<<"\% Done\r"<<std::flush;
+    }
   }
+  std::cout<<std::endl;
 
   std::cout<<"Cuts Done! Writing image\n"<<std::flush;
 
