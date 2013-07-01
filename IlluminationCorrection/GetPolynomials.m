@@ -1,6 +1,6 @@
 %function poly = GetPolynomials(AF, TF, tilesPerRow)
 numTiles = size(AF,3);
-lin  = reshape(1:numTiles, tilesPerRow, numTiles/tilesPerRow );
+lin  = reshape( 1:numTiles, tilesPerRow, numTiles/tilesPerRow );
 for j = 1:2
 lin1 = lin(:,j:2:end);
 lin1 = lin1(:);
@@ -17,8 +17,8 @@ countAF    = zeros(numCurrentTiles,1);
 AFIndValsC = cell(numCurrentTiles,1);
 FlIndValsC = cell(numCurrentTiles,1);
 for i=1:numCurrentTiles
-    curIm         = A(:,:,i);
-    curLab        = T(:,:,i);
+    curIm         = A(:,:,lin1(i));
+    curLab        = T(:,:,lin1(i));
     currentAF     = curIm(curLab==1);
     [xAF,yAF]     = find(curLab==1);
     AFIndValsC{i} = [ currentAF xAF yAF ];
