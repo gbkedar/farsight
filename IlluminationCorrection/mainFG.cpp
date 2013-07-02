@@ -15,6 +15,7 @@
  */
 //#define DBGGG
 //#define Min_Error_Thres
+#define Otsu_DBGG
 
 #include <vector>
 #include <string>
@@ -284,6 +285,103 @@ void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
   return;
 }
 
+#ifndef Min_Error_Thres
+void returnthresh
+	( itk::SmartPointer<US3ImageType> input_image, int num_bin_levs,
+	  std::vector< US3ImageType::PixelType > &returnVec )
+{
+  //Instantiate the different image and filter types that will be used
+  typedef itk::ImageRegionConstIterator< US3ImageType > ConstIteratorType;
+  typedef itk::Statistics::Histogram< float > HistogramType;
+  typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
+
+  std::cout<<"Starting threshold computation\n";
+
+  //Create a temporary histogram container:
+  const int numBins = itk::NumericTraits<US3ImageType::PixelType>::max()+1;
+  double *tempHist;
+  tempHist = (double*) malloc( sizeof(double) * numBins );
+  for(itk::SizeValueType i=0; i<=numBins; ++i)
+    tempHist[i] = 0;
+
+  US3ImageType::PixelType maxval = itk::NumericTraits<US3ImageType::PixelType>::ZeroValue();
+  US3ImageType::PixelType minval = itk::NumericTraits<US3ImageType::PixelType>::max();
+  //Populate the histogram (assume pixel type is actually is some integer type):
+  ConstIteratorType it( input_image, input_image->GetRequestedRegion() );
+  for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
+  {
+    US3ImageType::PixelType pix = it.Get();
+    ++tempHist[pix];
+    if( pix > maxval ) maxval = pix;
+    if( pix < minval ) minval = pix;
+  }
+  //return max of type if there is no variation in the staining
+  if( (maxval-minval)<3 )
+  {
+    for( unsigned i=0; i<returnVec.size(); ++i )
+      returnVec.at(i) = itk::NumericTraits<US3ImageType::PixelType>::max();
+    return;
+  }
+  const US3ImageType::PixelType numBinsPresent = maxval+1;
+  
+  //Find max value in the histogram
+  double floatIntegerMax = itk::NumericTraits<US3ImageType::PixelType>::max();
+  double max = 0.0;
+  for(US3ImageType::PixelType i=0; i<numBinsPresent; ++i)
+    if( tempHist[i] > max )
+      max = tempHist[i];
+
+  double scaleFactor = 1;
+  if(max >= floatIntegerMax)
+    scaleFactor = floatIntegerMax / max;
+
+  HistogramType::Pointer histogram = HistogramType::New() ;
+  // initialize histogram
+  HistogramType::SizeType size;
+  HistogramType::MeasurementVectorType lowerBound;
+  HistogramType::MeasurementVectorType upperBound;
+
+  lowerBound.SetSize(1);
+  upperBound.SetSize(1);
+  size.SetSize(1);
+
+  lowerBound.Fill(0.0);
+  upperBound.Fill((double)maxval);
+  size.Fill(numBinsPresent);
+
+  histogram->SetMeasurementVectorSize(1);
+  histogram->Initialize(size, lowerBound, upperBound ) ;
+
+  US3ImageType::PixelType i=0;
+  for (HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter )
+  {
+    float norm_freq = (float)(tempHist[i] * scaleFactor);
+    iter.SetFrequency(norm_freq);
+    ++i;
+  }
+  free( tempHist );
+
+  std::cout<<"Histogram computed\n";
+
+  CalculatorType::Pointer calculator = CalculatorType::New();
+  calculator->SetNumberOfThresholds( num_bin_levs );
+  calculator->SetInputHistogram( histogram );
+  calculator->Update();
+  const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
+  CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
+
+//  std::vector< US3ImageType::PixelType > returnVec( num_bin_levs, 0 );
+  for(US3ImageType::PixelType i=0; i < num_bin_levs; ++itNum, ++i)
+  {
+    returnVec.at(i) = (static_cast<float>(*itNum));
+#ifdef Otsu_DBGG
+    std::cout<<"Threshold computed: "<<returnVec.at(i)<<std::endl;
+#endif //Otsu_DBGG
+  }
+  return;
+}
+#endif //Min_Error_Thres
+
 void ComputeCosts( int numThreads,
 		   std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
@@ -297,6 +395,7 @@ void ComputeCosts( int numThreads,
 {
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIterator< CostImageType > CostIterType;
+  typedef itk::ImageRegionIterator< US3ImageType > IterTypeUS3d;
   itk::IndexValueType numCol = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
   itk::IndexValueType numRow = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
   itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5)
@@ -316,13 +415,13 @@ void ComputeCosts( int numThreads,
   {
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
+#ifdef Min_Error_Thres
       //Compute histogram at point i,j with window size define WinSz
       std::vector< double > histogram( NumBins, 0 );
       US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
       if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
       if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
       if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
-#ifdef Min_Error_Thres
       itk::SizeValueType max = ComputeHistogram( medFiltImages, histogram, start );
       US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
       std::vector< double > parameters( 5, 0 );
@@ -439,14 +538,14 @@ void ComputeCosts( int numThreads,
 	  costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
         }
       }
-#else //Min_Error_Thres
-      int num_bin_levs = 2;
-      std::vector< US3ImageType::PixelType > returnVec( num_bin_levs, 0 );
+#else //Min_Error_Thres not selected trying Otsu
+      int numBinLevels = 2;
+      std::vector< US3ImageType::PixelType > returnVec( numBinLevels, 0 );
       //Allocate space
-      US3ImageType::Pointer outputImage = US3ImageType::New();
+      US3ImageType::Pointer roiImage = US3ImageType::New();
       US3ImageType::PointType origin3d;
       origin3d[0] = 0; origin3d[1] = 0; origin3d[2] = 0;
-      outputImage->SetOrigin( origin3d );
+      roiImage->SetOrigin( origin3d );
       US3ImageType::IndexType start3d;
       start3d[0] = 0; start3d[1] = 0; start3d[2] = 0;
       US3ImageType::SizeType size3d;
@@ -454,15 +553,53 @@ void ComputeCosts( int numThreads,
       US3ImageType::RegionType region3d;
       region3d.SetSize( size3d );
       region3d.SetIndex( start3d );
-      outputImage->SetRegions( region3d );
-      outputImage->Allocate();
-      outputImage->FillBuffer(0);
-      outputImage->Update();
-      returnthresh
+      roiImage->SetRegions( region3d );
+      roiImage->Allocate();
+      roiImage->FillBuffer(0);
+      roiImage->Update();
 
-
-
-
+      //Fill image with ROI
+      US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
+      US2ImageType::SizeType  size;   size[0] = WinSz;     size[1] = WinSz;
+      if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
+      if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
+      if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
+      size3d[0] = WinSz; size3d[1] = WinSz; size3d[2] = 1;
+      for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
+      {
+	US2ImageType::RegionType region;
+	region.SetSize( size ); region.SetIndex( start );
+	start3d[0] = 0; start3d[1] = 0; start3d[2] = k;
+	region3d.SetSize( size3d ); region3d.SetIndex( start3d );
+	ConstIterType constIter( medFiltImages.at(k), region );
+	IterTypeUS3d iter3d( roiImage, region3d );
+	constIter.GoToBegin(); iter3d.GoToBegin();
+	for( ; !iter3d.IsAtEnd(); ++iter3d, ++constIter )
+	  iter3d.Set( constIter.Get() );
+      }
+      returnthresh( roiImage, numBinLevels, returnVec );
+      //Write the thresholds into the cost images
+      for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
+      {
+	//Declare iterators for the two FG cost images
+	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
+	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
+	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
+	US2ImageType::RegionType region;
+	US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
+	region.SetSize( size ); region.SetIndex( curPoint );
+	ConstIterType constIter ( medFiltImages.at(k), region );
+	CostIterType costIterFlour	( flourCosts.at(k),	region );
+	CostIterType costIterAutoFlour	( autoFlourCosts.at(k),	region );
+	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterAutoFlour.GoToBegin();
+	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterAutoFlour )
+	{
+	  if( constIter.Get()>returnVec.at(0) )
+	    costIterAutoFlour.Set(1);
+	  if( constIter.Get()>returnVec.at(1) )
+	    costIterFlour.Set(1);
+	}
+      }
 #endif //Min_Error_Thres
     }
 #ifdef DBGG
@@ -480,98 +617,6 @@ void ComputeCosts( int numThreads,
 #endif //DBGGG
   return;
 }
-
-#ifndef //Min_Error_Thres
-std::vector<US3ImageType::PixelType> returnthresh
-	( itk::SmartPointer<US3ImageType> input_image, int num_bin_levs,
-	  std::vector< US3ImageType::PixelType > &returnVec )
-{
-  //Instantiate the different image and filter types that will be used
-  typedef itk::ImageRegionConstIterator< US3ImageType > ConstIteratorType;
-  typedef itk::Statistics::Histogram< float > HistogramType;
-  typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
-
-  std::cout<<"Starting threshold computation\n";
-
-  //Create a temporary histogram container:
-  const int numBins = itk::NumericTraits<US3ImageType::PixelType>::max()+1;
-  double *tempHist;
-  tempHist = (double*) malloc( sizeof(double) * numBins );
-  for(US3ImageType::PixelType i=0; i<=numBins; ++i)
-    tempHist[i] = 0;
-
-  US3ImageType::PixelType maxval = itk::NumericTraits<US3ImageType::PixelType>::ZeroValue();
-  US3ImageType::PixelType minval = itk::NumericTraits<US3ImageType::PixelType>::max();
-  //Populate the histogram (assume pixel type is actually is some integer type):
-  ConstIteratorType it( input_image, input_image->GetRequestedRegion() );
-  for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
-  {
-    US3ImageType::PixelType pix = it.Get();
-    ++tempHist[pix];
-    if( pix > maxval ) maxval = pix;
-    if( pix < minval ) minval = pix;
-  }
-  //return max of type if there is no variation in the staining
-  if( (maxval-minval)<3 ) return itk::NumericTraits<US3ImageType::PixelType>::max(); 
-  const US3ImageType::PixelType numBinsPresent = maxval+1;
-  
-  //Find max value in the histogram
-  double floatIntegerMax = itk::NumericTraits<US3ImageType::PixelType>::max();
-  double max = 0.0;
-  for(US3ImageType::PixelType i=0; i<numBinsPresent; ++i)
-    if( tempHist[i] > max )
-      max = tempHist[i];
-
-  double scaleFactor = 1;
-  if(max >= floatIntegerMax)
-    scaleFactor = floatIntegerMax / max;
-
-  HistogramType::Pointer histogram = HistogramType::New() ;
-  // initialize histogram
-  HistogramType::SizeType size;
-  HistogramType::MeasurementVectorType lowerBound;
-  HistogramType::MeasurementVectorType upperBound;
-
-  lowerBound.SetSize(1);
-  upperBound.SetSize(1);
-  size.SetSize(1);
-
-  lowerBound.Fill(0.0);
-  upperBound.Fill((double)maxval);
-  size.Fill(numBinsPresent);
-
-  histogram->SetMeasurementVectorSize(1);
-  histogram->Initialize(size, lowerBound, upperBound ) ;
-
-  US3ImageType::PixelType i=0;
-  for (HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter )
-  {
-    float norm_freq = (float)(tempHist[i] * scaleFactor);
-    iter.SetFrequency(norm_freq);
-    ++i;
-  }
-  free( tempHist );
-
-  std::cout<<"Histogram computed\n";
-
-  CalculatorType::Pointer calculator = CalculatorType::New();
-  calculator->SetNumberOfThresholds( num_bin_levs );
-  calculator->SetInputHistogram( histogram );
-  calculator->Update();
-  const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
-  CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
-
-//  std::vector< US3ImageType::PixelType > returnVec( num_bin_levs, 0 );
-  for(US3ImageType::PixelType i=0; i < num_bin_levs; ++itNum, ++i)
-  {
-    returnVec.at(i) = (static_cast<float>(*itNum));
-#ifdef DBGGG
-    std::cout<<"Threshold computed: "<<returnVec.at(i)<<std::endl;
-#endif //DBGGG
-  }
-  return;
-}
-#endif //Min_Error_Thres
 
 #ifdef DBGGG
 void CastNWriteImage( std::vector< itk::SmartPointer<CostImageType> > &inputImage, std::string &outFileName )
