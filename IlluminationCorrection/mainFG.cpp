@@ -14,8 +14,8 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 //#define DBGGG
-//#define Min_Error_Thres
-#define Otsu_DBGG
+#define Min_Error_Thres
+//#define Otsu_DBGG
 
 #include <vector>
 #include <string>
