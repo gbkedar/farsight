@@ -35,6 +35,9 @@
 #include "itkIntTypes.h"
 #include "itkNumericTraits.h"
 #include "itkExtractImageFilter.h"
+#include "itkMinErrorThresholdImageCalculator.h"
+#include "itkMinimumProjectionImageFilter.h"
+#include "itkMaximumProjectionImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkMedianImageFilter.h"
 #include "itkMeanImageFilter.h"
@@ -285,13 +288,21 @@ void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
   return;
 }
 
-#ifndef Min_Error_Thres
+#ifdef Min_Error_Thres
+void returnthresh
+	( itk::SmartPointer<US2ImageType> input_image, int num_bin_levs,
+	  std::vector< US2ImageType::PixelType > &returnVec )
+{
+  //Instantiate the different image and filter types that will be used
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIteratorType;
+#else //Min_Error_Thres
 void returnthresh
 	( itk::SmartPointer<US3ImageType> input_image, int num_bin_levs,
 	  std::vector< US3ImageType::PixelType > &returnVec )
 {
   //Instantiate the different image and filter types that will be used
   typedef itk::ImageRegionConstIterator< US3ImageType > ConstIteratorType;
+#endif
   typedef itk::Statistics::Histogram< float > HistogramType;
   typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
 
@@ -307,7 +318,7 @@ void returnthresh
   US3ImageType::PixelType maxval = itk::NumericTraits<US3ImageType::PixelType>::ZeroValue();
   US3ImageType::PixelType minval = itk::NumericTraits<US3ImageType::PixelType>::max();
   //Populate the histogram (assume pixel type is actually is some integer type):
-  ConstIteratorType it( input_image, input_image->GetRequestedRegion() );
+  ConstIteratorType it( input_image, input_image->GetLargestPossibleRegion() );
   for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
   {
     US3ImageType::PixelType pix = it.Get();
@@ -367,6 +378,7 @@ void returnthresh
   calculator->SetNumberOfThresholds( num_bin_levs );
   calculator->SetInputHistogram( histogram );
   calculator->Update();
+  std::cout<<"Threshold computed: "<<std::flush;
   const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
   CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
 
@@ -375,12 +387,80 @@ void returnthresh
   {
     returnVec.at(i) = (static_cast<float>(*itNum));
 #ifdef Otsu_DBGG
-    std::cout<<"Threshold computed: "<<returnVec.at(i)<<std::endl;
+    std::cout<<returnVec.at(i)<<std::endl<<std::flush;
 #endif //Otsu_DBGG
   }
   return;
 }
-#endif //Min_Error_Thres
+
+void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads )
+{
+  typedef itk::MaximumProjectionImageFilter< US3ImageType, US2ImageType > MaxProjFilterType;
+  typedef itk::MinimumProjectionImageFilter< US3ImageType, US2ImageType > MinProjFilterType;
+  typedef itk::MinErrorThresholdImageCalculator< US2ImageType > MinErrorThresCalcType;
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  typedef itk::ImageRegionIterator< US3ImageType > IterTypeUS3d;
+
+  MaxProjFilterType::Pointer maxIntProjFilt = MaxProjFilterType::New();
+  maxIntProjFilt->SetInput( InputImage );
+  maxIntProjFilt->SetProjectionDimension( 2 );
+
+  MinProjFilterType::Pointer minIntProjFilt = MinProjFilterType::New();
+  minIntProjFilt->SetInput( InputImage );
+  minIntProjFilt->SetProjectionDimension( 2 );
+
+  try
+  {
+    minIntProjFilt->Update();
+    maxIntProjFilt->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught !" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+
+  std::cout<<"Size: "<< minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[0]
+  		<< " " << minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[1];
+
+  std::vector< US2ImageType::PixelType > returnVec(1,0);
+  returnthresh( maxIntProjFilt->GetOutput(), 1, returnVec );
+  
+  double size = InputImage->GetLargestPossibleRegion().GetSize()[0] *
+  		InputImage->GetLargestPossibleRegion().GetSize()[1];
+  double meanMin = 0;
+  
+  ConstIterType minIter( minIntProjFilt->GetOutput(),
+  			 minIntProjFilt->GetOutput()->GetLargestPossibleRegion() );
+  minIter.GoToBegin();
+  for( ; !minIter.IsAtEnd(); ++minIter )
+    meanMin += (double)minIter.Get()/size;
+  meanMin = std::ceil( meanMin );
+
+  std::cout<<"Noise threshold is: "<<returnVec.at(0)<<"\tAverage min is: "<<meanMin<<std::endl;
+
+  itk::IndexValueType numSlices = InputImage->GetLargestPossibleRegion().GetSize()[22];
+#ifdef _OPENMP
+  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+  #pragma omp parallel for num_threads(numThreads)
+#endif
+  for( itk::IndexValueType i=0; i<numSlices; ++i )
+  {
+    US3ImageType::SizeType size;
+    size[0] = InputImage->GetLargestPossibleRegion().GetSize()[0];
+    size[1] = InputImage->GetLargestPossibleRegion().GetSize()[1];
+    size[2] = 1;
+    US3ImageType::IndexType start;
+    start[0] = 0; start[1] = 0; start[2] = i;
+    US3ImageType::RegionType region;
+    region.SetSize( size ); region.SetIndex( start );
+    IterTypeUS3d iter( InputImage, region );
+    iter.GoToBegin();
+    for( ; !iter.IsAtEnd(); ++iter )
+      if( iter.Get()>returnVec.at(0) )
+        iter.Set( meanMin );
+  }
+}
 
 void ComputeCosts( int numThreads,
 		   std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
@@ -855,6 +935,8 @@ int main(int argc, char *argv[])
   }
 
   US3ImageType::Pointer inputImage = reader->GetOutput();
+
+  SetSaturatedFGPixelsToMin( inputImage, numThreads );
 
   itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
   itk::IndexValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
