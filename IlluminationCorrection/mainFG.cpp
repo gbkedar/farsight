@@ -309,11 +309,8 @@ void returnthresh
   std::cout<<"Starting threshold computation\n";
 
   //Create a temporary histogram container:
-  const int numBins = itk::NumericTraits<US3ImageType::PixelType>::max()+1;
-  double *tempHist;
-  tempHist = (double*) malloc( sizeof(double) * numBins );
-  for(itk::SizeValueType i=0; i<=numBins; ++i)
-    tempHist[i] = 0;
+  const itk::SizeValueType numBins = itk::NumericTraits<US3ImageType::PixelType>::max()+1;
+  std::vector< double > tempHist( numBins, 0 );
 
   US3ImageType::PixelType maxval = itk::NumericTraits<US3ImageType::PixelType>::ZeroValue();
   US3ImageType::PixelType minval = itk::NumericTraits<US3ImageType::PixelType>::max();
@@ -322,7 +319,7 @@ void returnthresh
   for ( it.GoToBegin(); !it.IsAtEnd(); ++it )
   {
     US3ImageType::PixelType pix = it.Get();
-    ++tempHist[pix];
+    ++tempHist.at(pix);
     if( pix > maxval ) maxval = pix;
     if( pix < minval ) minval = pix;
   }
@@ -333,14 +330,14 @@ void returnthresh
       returnVec.at(i) = itk::NumericTraits<US3ImageType::PixelType>::max();
     return;
   }
-  const US3ImageType::PixelType numBinsPresent = maxval+1;
+  const itk::SizeValueType numBinsPresent = maxval-minval+1;
   
   //Find max value in the histogram
-  double floatIntegerMax = itk::NumericTraits<US3ImageType::PixelType>::max();
+  double floatIntegerMax = (double)itk::NumericTraits<US3ImageType::PixelType>::max()/2.0;
   double max = 0.0;
-  for(US3ImageType::PixelType i=0; i<numBinsPresent; ++i)
-    if( tempHist[i] > max )
-      max = tempHist[i];
+  for( itk::SizeValueType i=minval; i<=maxval; ++i )
+    if( tempHist.at(i) > max )
+      max = tempHist.at(i);
 
   double scaleFactor = 1;
   if(max >= floatIntegerMax)
@@ -357,20 +354,18 @@ void returnthresh
   size.SetSize(1);
 
   lowerBound.Fill(0.0);
-  upperBound.Fill((double)maxval);
+  upperBound.Fill((double)numBinsPresent);
   size.Fill(numBinsPresent);
 
   histogram->SetMeasurementVectorSize(1);
-  histogram->Initialize(size, lowerBound, upperBound ) ;
+  histogram->Initialize( size, lowerBound, upperBound ) ;
 
-  US3ImageType::PixelType i=0;
-  for (HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter )
+  itk::SizeValueType i=minval;
+  for( HistogramType::Iterator iter = histogram->Begin(); iter != histogram->End(); ++iter, ++i )
   {
-    float norm_freq = (float)(tempHist[i] * scaleFactor);
+    float norm_freq = (float)(tempHist.at(i) * scaleFactor);
     iter.SetFrequency(norm_freq);
-    ++i;
   }
-  free( tempHist );
 
   std::cout<<"Histogram computed\n";
 
@@ -382,13 +377,10 @@ void returnthresh
   const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
   CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
 
-//  std::vector< US3ImageType::PixelType > returnVec( num_bin_levs, 0 );
   for(US3ImageType::PixelType i=0; i < num_bin_levs; ++itNum, ++i)
   {
-    returnVec.at(i) = (static_cast<float>(*itNum));
-#ifdef Otsu_DBGG
+    returnVec.at(i) = (static_cast<float>(*itNum))+minval;
     std::cout<<returnVec.at(i)<<std::endl<<std::flush;
-#endif //Otsu_DBGG
   }
   return;
 }
