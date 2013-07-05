@@ -430,13 +430,14 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     std::cerr << e << std::endl;
     exit( EXIT_FAILURE );
   }
+  itk::SizeValueType countCorrected = 0;
 #endif //NOISE_THR_DEBUG
 
   std::cout<<"Size: "<< minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[0]
   		<< " " << minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[1];
 
-  std::vector< US2ImageType::PixelType > returnVec(1,0);
-  returnthresh( maxIntProjFilt->GetOutput(), 1, returnVec );
+  std::vector< US2ImageType::PixelType > thresholdVec(1,0);
+  returnthresh( maxIntProjFilt->GetOutput(), 1, thresholdVec );
   
   double size = InputImage->GetLargestPossibleRegion().GetSize()[0] *
   		InputImage->GetLargestPossibleRegion().GetSize()[1];
@@ -449,9 +450,9 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     meanMin += (double)minIter.Get()/size;
   meanMin = std::ceil( meanMin );
 
-  std::cout<<"Noise threshold is: "<<returnVec.at(0)<<"\tAverage min is: "<<meanMin<<std::endl;
+  std::cout<<"Noise threshold is: "<<thresholdVec.at(0)<<"\tAverage min is: "<<meanMin<<std::endl;
 
-  itk::IndexValueType numSlices = InputImage->GetLargestPossibleRegion().GetSize()[22];
+  itk::IndexValueType numSlices = InputImage->GetLargestPossibleRegion().GetSize()[2];
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
   #pragma omp parallel for num_threads(numThreads)
@@ -469,10 +470,16 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     IterTypeUS3d iter( InputImage, region );
     iter.GoToBegin();
     for( ; !iter.IsAtEnd(); ++iter )
-      if( iter.Get()>returnVec.at(0) )
+      if( iter.Get()>thresholdVec.at(0) )
+      {
         iter.Set( meanMin );
+#ifdef NOISE_THR_DEBUG
+	++countCorrected;
+#endif
+      }
   }
 #ifdef NOISE_THR_DEBUG
+  std::cout<<"countCorrected = "<<countCorrected<<std::endl;
   typedef itk::ImageFileWriter< US3ImageType > WriterType3d;
   WriterType3d::Pointer writer3d = WriterType3d::New();
   writer3d->SetFileName( "noisecorrected.tif" );
