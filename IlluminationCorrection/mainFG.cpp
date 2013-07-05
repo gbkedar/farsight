@@ -14,7 +14,7 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 //#define DBGGG
-//#define PROJECTION_DEBUG
+//#define NOISE_THR_DEBUG
 #define Min_Error_Thres
 
 #include <vector>
@@ -412,7 +412,7 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     exit (EXIT_FAILURE);
   }
 
-#ifdef PROJECTION_DEBUG
+#ifdef NOISE_THR_DEBUG
   typedef itk::ImageFileWriter< US2ImageType > WriterType;
   WriterType::Pointer writer = WriterType::New();
   writer->SetFileName( "minIntProj.tif" );
@@ -430,7 +430,7 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     std::cerr << e << std::endl;
     exit( EXIT_FAILURE );
   }
-#endif
+#endif //NOISE_THR_DEBUG
 
   std::cout<<"Size: "<< minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[0]
   		<< " " << minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[1];
@@ -472,6 +472,21 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
       if( iter.Get()>returnVec.at(0) )
         iter.Set( meanMin );
   }
+#ifdef NOISE_THR_DEBUG
+  typedef itk::ImageFileWriter< US3ImageType > WriterType3d;
+  WriterType3d::Pointer writer3d = WriterType3d::New();
+  writer3d->SetFileName( "noisecorrected.tif" );
+  writer3d->SetInput( InputImage );
+  try
+  {
+    writer3d->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+#endif //NOISE_THR_DEBUG
 }
 
 void ComputeCosts( int numThreads,
