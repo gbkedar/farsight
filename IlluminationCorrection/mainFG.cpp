@@ -46,8 +46,8 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
-#define WinSz 100	//Histogram computed on this window
-#define CWin  32	//This is the inner window
+#define WinSz 256	//Histogram computed on this window
+#define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 
 typedef unsigned short	USPixelType;
@@ -89,15 +89,12 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   currentTile->Register();
 }
 
-itk::SizeValueType ComputeHistogram(
+void ComputeHistogram(
 	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 	std::vector< double > &histogram,
-	US2ImageType::IndexType &start )
+	US2ImageType::IndexType &start, US3ImageType::PixelType valsPerBin )
 {
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
-  itk::SizeValueType histSize = itk::NumericTraits<US2ImageType::PixelType>::max()+1;
-  std::vector< double > histogramInternal( histSize, 0 );
-  itk::SizeValueType max = 0;
   for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
   {
     US2ImageType::SizeType size; size[0] = WinSz; size[1] = WinSz;
@@ -105,35 +102,20 @@ itk::SizeValueType ComputeHistogram(
     region.SetSize( size ); region.SetIndex( start );
     ConstIterType constIter ( medFiltImages.at(i), region );
     for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
-      ++histogramInternal[constIter.Get()];
-    if( constIter.Get()>max )
-      max = constIter.Get();
+      ++histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)];
   }
-  itk::SizeValueType valsPerBin = std::floor( ((double)max+1)/((double)NumBins) + 0.5 );
-  itk::SizeValueType overFlow = 0;
-  if( valsPerBin*NumBins >= (max+1) )
-    overFlow = max+1-valsPerBin*NumBins;
-#ifdef DBGG
-  double sum = 0.0;
-#endif //DBGG
-  for( itk::SizeValueType i=0; i<NumBins; ++i )
+  double normalizeFactor = ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
+  for( itk::SizeValueType j=0; j<histogram.size(); ++j )
   {
-    for( itk::SizeValueType j=0; j<valsPerBin; ++j )
-      histogram.at(i) += histogramInternal.at(i*valsPerBin+j);
-//    if( i==(NumBins-1) )
-//      for( itk::SizeValueType j=0; j<overFlow; ++j )
-//	histogram.at(i) += histogramInternal.at(i+1*valsPerBin+j);
-    histogram.at(i) /= ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
+    histogram.at(j) /= normalizeFactor;
 #ifdef DBGG
     sum += histogram.at(i);
-  }
-  std::cout<<"Sum:"<<sum<<std::endl;
-#else
-  }
 #endif //DBGG
-  if( valsPerBin )
-    max = valsPerBin*NumBins - 1;
-  return max;
+  }
+#ifdef DBGG
+  std::cout<<"Sum:"<<sum<<std::endl;
+#endif //DBGG
+  return;
 }
 
 void computePoissonParams( std::vector< double > &histogram,
@@ -385,7 +367,7 @@ void returnthresh
   return;
 }
 
-void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads )
+US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads )
 {
   typedef itk::MaximumProjectionImageFilter< US3ImageType, US2ImageType > MaxProjFilterType;
   typedef itk::MinimumProjectionImageFilter< US3ImageType, US2ImageType > MinProjFilterType;
@@ -494,6 +476,7 @@ void SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads
     exit( EXIT_FAILURE );
   }
 #endif //NOISE_THR_DEBUG
+  return (US3ImageType::PixelType) thresholdVec.at(0);
 }
 
 void ComputeCosts( int numThreads,
@@ -501,7 +484,8 @@ void ComputeCosts( int numThreads,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG
+		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
+		   US3ImageType::PixelType valsPerBin
 #ifdef DBGGG
 , std::vector< itk::SmartPointer<US2ImageType> > &resacledImages
 #endif //DBGGG
@@ -518,7 +502,6 @@ void ComputeCosts( int numThreads,
 #ifdef DBGGG
   unsigned count = 0;
   clock_t start_time = clock();
-  double ratioMax=0, ratioMin=DBL_MAX;
 #endif //DBGGG
 
 #ifdef _OPENMP
@@ -536,22 +519,14 @@ void ComputeCosts( int numThreads,
       if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
       if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
       if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
-      itk::SizeValueType max = ComputeHistogram( medFiltImages, histogram, start );
+      ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
       US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
       std::vector< double > parameters( 5, 0 );
       computePoissonParams( histogram, parameters );
       std::vector< double > pdf0( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(0), pdf0 );
       std::vector< double > pdf1( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(1), pdf1 );
       std::vector< double > pdf2( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(2), pdf2 );
-//      //Fix the params
-//      double ratio = ((double)max)/((double)histogram.size());
-//      parameters.at(0) *= ratio; parameters.at(2) *= ratio; parameters.at(2) *= ratio;
-      double ratio = ((double)histogram.size())/((double)max);
 #ifdef DBGGG
-      if( ratio > ratioMax )
-        ratioMax = ratio;
-      if( ratio < ratioMin )
-	ratioMin = ratio;
       if( !omp_get_thread_num() )
       {
 	std::cout << "histogram computed for " << curPoint << "\t" ;
@@ -598,7 +573,7 @@ void ComputeCosts( int numThreads,
 #endif //DBGGG
 	{
 	  itk::SizeValueType currentPixel = (US2ImageType::PixelType)std::floor
-						( ((double)constIter.Get())*ratio + 0.5 );
+						( ((double)constIter.Get())/((double)valsPerBin) );
 #ifdef DBGGG
 	  rescaleIter.Set( constIter.Get() );
 #endif //DBGGG
@@ -635,11 +610,6 @@ void ComputeCosts( int numThreads,
 	  {
 	    FBG = AFBG = 10000.0;
 	    F   =  AF  = 0;
-	  }
-	  else if( currentPixel > max )
-	  {
-	    FBG = AFBG = 0;
-	    F   =  AF  = 10000.0;
 	  }
 	  else
 	  {
@@ -726,9 +696,6 @@ void ComputeCosts( int numThreads,
 #ifdef DBGG
   std::cout<<"\n";
 #endif //DBGG
-#ifdef DBGGG
-  std::cout<<"Ratio max:"<<ratioMax<<"\t\tmin:"<<ratioMin<<std::endl<<std::flush;
-#endif //DBGGG
   return;
 }
 
@@ -944,7 +911,7 @@ int main(int argc, char *argv[])
 
   std::string inputImageName  = argv[1]; //Name of the input image
   std::string outputImageName = argv[2];
-  int numThreads = 20;
+  int numThreads = 24;
   if( argc == 4 )
     numThreads = atoi( argv[3] );
 
@@ -970,7 +937,7 @@ int main(int argc, char *argv[])
 
   US3ImageType::Pointer inputImage = reader->GetOutput();
 
-  SetSaturatedFGPixelsToMin( inputImage, numThreads );
+  US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
 
   itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
   itk::IndexValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
@@ -1075,11 +1042,17 @@ int main(int argc, char *argv[])
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
+  US3ImageType::PixelType valsPerBin = 1;
+  while( ((double)(upperThreshold+1)/(double)valsPerBin) > NumBins )
+  {
+    ++valsPerBin;
+  }
+
   ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
 #ifdef DBGGG
-  				autoFlourCostsBG, flourCostsBG, resacledImages );
+  				autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
 #else
-  				autoFlourCostsBG, flourCostsBG );
+  				autoFlourCostsBG, flourCostsBG, valsPerBin );
 #endif //DBGGG
 
 #ifdef DBGGG
