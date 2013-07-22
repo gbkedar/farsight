@@ -193,7 +193,7 @@ int detectSeeds2D( float* IM, float* IM_out, unsigned short* IM_bin, int r, int 
 
 		for(int i=0; i<r*c; i++)
 		{
-			//if(sigma<=dImg[i]*2)
+			if(sigma<=dImg[i]*2)
 				IM_out[i] = (IM_out[i]>=IMG_tmp[i])? IM_out[i] : IMG_tmp[i];				
 		}		
 	}
