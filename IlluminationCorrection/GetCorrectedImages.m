@@ -41,31 +41,4 @@ FlMax = GetTenPCMinMaxVals( rowFlMax, colFlMax, FlAv, 1 );
 [rowFlMin,colFlMin] = GetDialatedMinMaxIndices( ZFl, 0 );
 FlMin = GetTenPCMinMaxVals( rowFlMin, colFlMin, FlAv, 0 );
 
-[rowBGMax,colBGMax] = GetDialatedMinMaxIndices( ZBG, 1 );
-BGMax = GetTenPCMinMaxVals( rowBGMax, colBGMax, BGAv, 1 );
-% [rowBGMin,colBGMin] = GetDialatedMinMaxIndices( ZBG, 0 );
-% BGMin = GetTenPCMinMaxVals( rowBGMin, colBGMin, BGAv, 0 )
-%Very noisy use AF range
-BGMin = BGMax-(AFMax-AFMin);
-
-FlSubSurf = GetRescaledSurface( ZFl, FlMin, FlMax );
-AFSubSurf = GetRescaledSurface( ZAF, AFMin, AFMax );
-BGSubSurf = GetRescaledSurface( ZBG, BGMin, BGMax );
-
-figure,imagesc(AFSubSurf);colorbar
-figure,imagesc(FlSubSurf);colorbar
-figure,imagesc(BGSubSurf);colorbar
-
-FlSubSurf = repmat(FlSubSurf,[1 1 size(A,3)]);
-AFSubSurf = repmat(AFSubSurf,[1 1 size(A,3)]);
-BGSubSurf = repmat(BGSubSurf,[1 1 size(A,3)]);
-FlSubSurf(T~=2) = 0;
-AFSubSurf(T~=1) = 0;
-BGSubSurf(T~=0) = 0;
-FlSubSurf = AFSubSurf+FlSubSurf+BGSubSurf;
-clear AFSubSurf BGSubSurf
-
-OutIm = exp(log(cast(A,'double'))-FlSubSurf);
-OutIm = cast(OutIm,'uint16');
-
-end
+[rowBGMax,col
