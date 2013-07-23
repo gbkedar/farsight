@@ -13,9 +13,8 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-//#define DBGGG
+//#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-#define Min_Error_Thres
 
 #include <vector>
 #include <algorithm>
@@ -51,6 +50,7 @@
 #define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
+#define ORDER 4		//Order of the polynomial 1-4
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -110,13 +110,7 @@ void ComputeHistogram(
   for( itk::SizeValueType j=0; j<histogram.size(); ++j )
   {
     histogram.at(j) /= normalizeFactor;
-#ifdef DBGG
-    sum += histogram.at(i);
-#endif //DBGG
   }
-#ifdef DBGG
-  std::cout<<"Sum:"<<sum<<std::endl;
-#endif //DBGG
   return;
 }
 
@@ -124,9 +118,6 @@ void computePoissonParams( std::vector< double > &histogram,
 			   std::vector< double > &parameters )
 {
   itk::SizeValueType max = histogram.size()-1;
-#ifdef DBGG
-  std::cout<<"computing pos params with max " << max << "\n" << std::flush;
-#endif
   //The three-level min error thresholding algorithm
   double min_J = DBL_MAX;
   double P0, U0, P1, U1, P2, U2, U, J;
@@ -185,12 +176,12 @@ void computePoissonParams( std::vector< double > &histogram,
       }
     }
   }
-#ifdef DBGG
+#ifdef DEBUG_POS_EST
   std::cout<<"Parameters1: ";
   for( itk::SizeValueType j=0; j<parameters.size(); ++j )
     std::cout<<parameters.at(j)<<"\t";
   std::cout<<"\n"<<std::flush;
-#endif //DBGG
+#endif //DEBUG_POS_EST
 
   //try this: see if using two components is better
   //The penalty term is given as sqrt(k)*ln(n)
@@ -207,7 +198,7 @@ void computePoissonParams( std::vector< double > &histogram,
     }
     U0 /= P0;
 
-#ifdef DBGG
+#ifdef DEBUG_POS_EST
     for( itk::SizeValueType j=i+1; j<max; ++j )//to set the second threshold
     {
       //compute the current parameters of the second component
@@ -234,12 +225,12 @@ void computePoissonParams( std::vector< double > &histogram,
     }
 #endif
   }
-#ifdef DBGG
+#ifdef DEBUG_POS_EST
   std::cout<<"Parameters2: ";
   for( itk::SizeValueType j=0; j<parameters.size(); ++j )
     std::cout<<parameters.at(j)<<"\t";
   std::cout<<"\n"<<std::flush;
-#endif //DBGG
+#endif //DEBUG_POS_EST
 
   return;
 }
@@ -273,21 +264,12 @@ void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
   return;
 }
 
-#ifdef Min_Error_Thres
 void returnthresh
 	( itk::SmartPointer<US2ImageType> input_image, int num_bin_levs,
 	  std::vector< US2ImageType::PixelType > &returnVec )
 {
   //Instantiate the different image and filter types that will be used
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIteratorType;
-#else //Min_Error_Thres
-void returnthresh
-	( itk::SmartPointer<US3ImageType> input_image, int num_bin_levs,
-	  std::vector< US3ImageType::PixelType > &returnVec )
-{
-  //Instantiate the different image and filter types that will be used
-  typedef itk::ImageRegionConstIterator< US3ImageType > ConstIteratorType;
-#endif
   typedef itk::Statistics::Histogram< float > HistogramType;
   typedef itk::OtsuMultipleThresholdsCalculator< HistogramType > CalculatorType;
 
@@ -519,9 +501,9 @@ void ComputeCosts( int numThreads,
 		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
 		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
 		   US3ImageType::PixelType valsPerBin
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
 , std::vector< itk::SmartPointer<US2ImageType> > &resacledImages
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 		   )
 {
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
@@ -532,10 +514,10 @@ void ComputeCosts( int numThreads,
   itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5)
 			      -(itk::IndexValueType)floor(((double)CWin)/2+0.5);
 
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
   unsigned count = 0;
   clock_t start_time = clock();
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -545,7 +527,6 @@ void ComputeCosts( int numThreads,
   {
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
-#ifdef Min_Error_Thres
       //Compute histogram at point i,j with window size define WinSz
       std::vector< double > histogram( NumBins, 0 );
       US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
@@ -559,7 +540,7 @@ void ComputeCosts( int numThreads,
       std::vector< double > pdf0( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(0), pdf0 );
       std::vector< double > pdf1( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(1), pdf1 );
       std::vector< double > pdf2( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(2), pdf2 );
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
       if( !omp_get_thread_num() )
       {
 	std::cout << "histogram computed for " << curPoint << "\t" ;
@@ -567,7 +548,7 @@ void ComputeCosts( int numThreads,
 	std::cout << "Time: " << (clock()-start_time)/((float)CLOCKS_PER_SEC) << "\n";
 	start_time = clock();
       }
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
       for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
       {
 	//Declare iterators for the four images
@@ -583,7 +564,7 @@ void ComputeCosts( int numThreads,
 	CostIterType costIterAutoFlourBG( autoFlourCostsBG.at(k),region );
 	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
 	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
 	/****
 	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
 	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
@@ -596,20 +577,20 @@ void ComputeCosts( int numThreads,
 	IterType rescaleIter ( resacledImages.at(k), region );
 	rescaleIter.GoToBegin();
 /****	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )****/
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 
 	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterFlourBG,
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
 		++costIterAutoFlour, ++costIterAutoFlourBG, ++rescaleIter )
-#else  //DBGGG
+#else  //DEBUG_RESCALING_N_COST_EST
 		++costIterAutoFlour, ++costIterAutoFlourBG )
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 	{
 	  itk::SizeValueType currentPixel = (US2ImageType::PixelType)std::floor
 						( ((double)constIter.Get())/((double)valsPerBin) );
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
 	  rescaleIter.Set( constIter.Get() );
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 	  if( currentPixel >= pdf0.size() )
 	    currentPixel = pdf0.size()-1;
 
@@ -655,103 +636,53 @@ void ComputeCosts( int numThreads,
 	  costIterFlourBG.Set( FBG );	costIterAutoFlourBG.Set( AFBG );
         }
       }
-#else //Min_Error_Thres not selected trying Otsu
-      int numBinLevels = 2;
-      std::vector< US3ImageType::PixelType > returnVec( numBinLevels, 0 );
-      //Allocate space
-      US3ImageType::Pointer roiImage = US3ImageType::New();
-      US3ImageType::SizeType size3d;
-      size3d[0] = WinSz; size3d[1] = WinSz; size3d[2] = medFiltImages.size();
-      CreateDefaultCoordsNAllocateSpace<US3ImageType>( roiImage, size3d );
-
-      //Fill image with ROI
-      US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
-      US2ImageType::SizeType  size;   size[0] = WinSz;     size[1] = WinSz;
-      if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
-      if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
-      if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
-      size3d[0] = WinSz; size3d[1] = WinSz; size3d[2] = 1;
-      for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
-      {
-	US2ImageType::RegionType region;
-	region.SetSize( size ); region.SetIndex( start );
-	start3d[0] = 0; start3d[1] = 0; start3d[2] = k;
-	region3d.SetSize( size3d ); region3d.SetIndex( start3d );
-	ConstIterType constIter( medFiltImages.at(k), region );
-	IterTypeUS3d iter3d( roiImage, region3d );
-	constIter.GoToBegin(); iter3d.GoToBegin();
-	for( ; !iter3d.IsAtEnd(); ++iter3d, ++constIter )
-	  iter3d.Set( constIter.Get() );
-      }
-      returnthresh( roiImage, numBinLevels, returnVec );
-      //Write the thresholds into the cost images
-      for( itk::SizeValueType k=0; k<medFiltImages.size(); ++k )
-      {
-	//Declare iterators for the two FG cost images
-	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
-	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
-	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
-	US2ImageType::RegionType region;
-	US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
-	region.SetSize( size ); region.SetIndex( curPoint );
-	ConstIterType constIter ( medFiltImages.at(k), region );
-	CostIterType costIterFlour	( flourCosts.at(k),	region );
-	CostIterType costIterAutoFlour	( autoFlourCosts.at(k),	region );
-	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterAutoFlour.GoToBegin();
-	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterAutoFlour )
-	{
-	  if( constIter.Get()>returnVec.at(0) )
-	    costIterAutoFlour.Set(1);
-	  if( constIter.Get()>returnVec.at(1) )
-	    costIterFlour.Set(1);
-	}
-      }
-#endif //Min_Error_Thres
     }
-#ifdef DBGG
-    #pragma omp critical
-    {
-      std::cout<<++count<<"\t";
-    }
-#endif //DBGG
   }
-#ifdef DBGG
-  std::cout<<"\n";
-#endif //DBGG
   return;
 }
 
-#ifdef DBGGG
-void CastNWriteImage( std::vector< itk::SmartPointer<CostImageType> > &inputImage, std::string &outFileName )
+template<typename InputImageType, typename OutputImageType> void CastNWriteImage2DStackOfVecsTo3D
+  ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
+    std::string &outFileName )
 {
-  typedef itk::ImageRegionConstIterator< CostImageType > ConstIterType2d;
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
-  typedef itk::ImageFileWriter< US3ImageType > WriterType;
+  typedef typename itk::ImageRegionConstIterator< InputImageType > ConstIterType2d;
+  typedef typename itk::ImageRegionIteratorWithIndex< OutputImageType > IterType3d;
+  typedef typename itk::ImageFileWriter< OutputImageType > WriterType;
+
+  //Check if input vector is 2D and output is 3D n print error if not
+  if( InputImageType::ImageDimension!=2 || OutputImageType::ImageDimension!=3 )
+  {
+    std::cout<<"ERROR: Utility expects a 2D image stack and outputs a 3D image.\n";
+    return;
+  }
+
   //Allocate space
-  US3ImageType::Pointer outputImage = US3ImageType::New();
-  US3ImageType::SizeType size;
-  size[0] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
-  size[1] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
-  size[2] = inputImage.size();
-  CreateDefaultCoordsNAllocateSpace<US3ImageType>( outputImage, size );
+  typename OutputImageType::Pointer outputImage = OutputImageType::New();
+  typename OutputImageType::SizeType size;
+  typename OutputImageType::IndexType start;
+  typename OutputImageType::RegionType region;
+  start[0] = 0; start[1] = 0;
+  size[0]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  size[1]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  size[2]  = inputImage.size();
+  CreateDefaultCoordsNAllocateSpace<OutputImageType>( outputImage, size );
 
   //Cast n Write Values
-  bool warningWritten = false;
-  itk::SizeValueType typeMax = itk::NumericTraits<US3ImageType::PixelType>::max();
+  itk::SizeValueType typeMax = itk::NumericTraits<typename OutputImageType::PixelType>::max();
   for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
   {
     //Start index
     start[2] = i; size[2] = 1; //Reset for writing out the slices
-    CostImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
-    CostImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
+    typename InputImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
+    typename InputImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
     region.SetSize( size ); region.SetIndex( start );
-    CostImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
+    typename InputImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
     ConstIterType2d iter2d ( inputImage.at(i), region2d );
     IterType3d iter3d( outputImage, region );
     for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
-      iter3d.Set( (itk::SizeValueType)std::floor( iter2d.Get()+0.5 ) );
+      iter3d.Set( (typename OutputImageType::PixelType)std::floor( iter2d.Get()+0.5 ) );
   }
-  WriterType::Pointer writer = WriterType::New();
+  typename WriterType::Pointer writer = WriterType::New();
   writer = WriterType::New();
   writer->SetFileName( outFileName.c_str() );
   writer->SetInput( outputImage );
@@ -766,52 +697,6 @@ void CastNWriteImage( std::vector< itk::SmartPointer<CostImageType> > &inputImag
   }
   return;
 }
-
-void CastNWriteScaling( std::vector< itk::SmartPointer<US2ImageType> > &inputImage, std::string &outFileName )
-{
-  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType2d;
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
-  typedef itk::ImageFileWriter< US3ImageType > WriterType;
-  //Allocate space
-  US3ImageType::Pointer outputImage = US3ImageType::New();
-  US3ImageType::SizeType size;
-  size[0] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
-  size[1] = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
-  size[2] = inputImage.size();
-  CreateDefaultCoordsNAllocateSpace<CostImageType>( outputImage, size );
-
-  //Cast n Write Values
-  bool warningWritten = false;
-  itk::SizeValueType typeMax = itk::NumericTraits<US2ImageType::PixelType>::max();
-  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
-  {
-    //Start index
-    start[2] = i; size[2] = 1; //Reset for writing out the slices
-    US2ImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
-    US2ImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
-    region.SetSize( size ); region.SetIndex( start );
-    US2ImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
-    ConstIterType2d iter2d ( inputImage.at(i), region2d );
-    IterType3d iter3d( outputImage, region );
-    for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
-      iter3d.Set( iter2d.Get() );
-  }
-  WriterType::Pointer writer = WriterType::New();
-  writer = WriterType::New();
-  writer->SetFileName( outFileName.c_str() );
-  writer->SetInput( outputImage );
-  try
-  {
-    writer->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
-  return;
-}
-#endif //DBGGG
 
 void ComputeCut( itk::IndexValueType slice,
 		 std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
@@ -1047,7 +932,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
   CostImageType::Pointer BGAvgIm, double *flPolyCoeffs, double *AFPolyCoeffs,
   double *BGPolyCoeffs )
 {
-
+  ;
 }
 
 int main(int argc, char *argv[])
@@ -1103,10 +988,10 @@ int main(int argc, char *argv[])
   flourCosts.resize( numSlices );   autoFlourCosts.resize( numSlices );
   flourCostsBG.resize( numSlices ); autoFlourCostsBG.resize( numSlices );
 
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
   std::vector< itk::SmartPointer<US2ImageType> > resacledImages;
   resacledImages.resize( numSlices );
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -1152,17 +1037,17 @@ int main(int argc, char *argv[])
     costs3->Register(); costs4->Register();
     autoFlourCosts.at(i)   = costs1; flourCosts.at(i)   = costs2;
     autoFlourCostsBG.at(i) = costs3; flourCostsBG.at(i) = costs4;
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
     US2ImageType::Pointer rescIm = US2ImageType::New();
     CreateDefaultCoordsNAllocateSpace<US2ImageType>( rescIm, size );
     rescIm->Register();
     resacledImages.at(i) = rescIm;
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
   }
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
   std::string OutFiles = "costImageMedFilt.nrrd";
-  CastNWriteScaling( medFiltImages, OutFiles );
-#endif //DBGGG
+  CastNWriteImage2DStackOfVecsTo3D<US2ImageType,US3ImageType>( medFiltImages, OutFiles );
+#endif //DEBUG_RESCALING_N_COST_EST
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
@@ -1173,24 +1058,24 @@ int main(int argc, char *argv[])
   }
 
   ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
   				autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
 #else
   				autoFlourCostsBG, flourCostsBG, valsPerBin );
-#endif //DBGGG
+#endif //DEBUG_RESCALING_N_COST_EST
 
-#ifdef DBGGG
+#ifdef DEBUG_RESCALING_N_COST_EST
   std::string OutFiles1 = "costImageF.nrrd";
   std::string OutFiles2 = "costImageFBG.nrrd";
   std::string OutFiles3 = "costImageAF.nrrd";
   std::string OutFiles4 = "costImageAFBG.nrrd";
   std::string OutFiles5 = "costImageInputResc.nrrd";
-  CastNWriteImage( flourCosts,		OutFiles1 );
-  CastNWriteImage( flourCostsBG,	OutFiles2 );
-  CastNWriteImage( autoFlourCosts,	OutFiles3 );
-  CastNWriteImage( autoFlourCostsBG,	OutFiles4 );
-  CastNWriteScaling( resacledImages,	OutFiles5 );
-#endif //DBGGG
+  CastNWriteImage2DStackOfVecsTo3D<CostImageType,US3ImageType>( flourCosts,	  OutFiles1 );
+  CastNWriteImage2DStackOfVecsTo3D<CostImageType,US3ImageType>( flourCostsBG,	  OutFiles2 );
+  CastNWriteImage2DStackOfVecsTo3D<CostImageType,US3ImageType>( autoFlourCosts,   OutFiles3 );
+  CastNWriteImage2DStackOfVecsTo3D<CostImageType,US3ImageType>( autoFlourCostsBG, OutFiles4 );
+  CastNWriteImage2DStackOfVecsTo3D<US2ImageType ,US3ImageType>( resacledImages,   OutFiles5 );
+#endif //DEBUG_RESCALING_N_COST_EST
 
   //Copy into 3d image
   UC3ImageType::Pointer labelImage = UC3ImageType::New();
