@@ -15,6 +15,7 @@
  */
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
+//#define DEBUG_MEAN_PROJECTIONS
 
 #include <vector>
 #include <algorithm>
@@ -37,6 +38,7 @@
 #include "itkExtractImageFilter.h"
 #include "itkMinErrorThresholdImageCalculator.h"
 #include "itkMinimumProjectionImageFilter.h"
+#include "itkCastImageFilter.h"
 #include "itkMaximumProjectionImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkMedianImageFilter.h"
@@ -641,9 +643,44 @@ void ComputeCosts( int numThreads,
   return;
 }
 
-template<typename InputImageType, typename OutputImageType> void CastNWriteImage2DStackOfVecsTo3D
-  ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
+template<typename InputImageType, typename OutputImageType> void CastNWriteImage
+  ( typename itk::SmartPointer<InputImageType> inputImage,
     std::string &outFileName )
+{
+  typedef typename itk::CastImageFilter<InputImageType,
+  					OutputImageType> CastFilterType;
+  typedef typename itk::ImageFileWriter< OutputImageType > WriterType;
+
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"This function needs equal input and output dimensions";
+    return;
+  }
+
+  typename CastFilterType::Pointer cast = CastFilterType::New();
+  cast->SetInput( inputImage );
+
+  typename WriterType::Pointer writer = WriterType::New();
+  writer = WriterType::New();
+  writer->SetFileName( outFileName.c_str() );
+  writer->SetInput( cast->GetOutput() );
+  try
+  {
+    writer->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  return;
+}
+
+
+template<typename InputImageType, typename OutputImageType>
+  void CastNWriteImage2DStackOfVecsTo3D
+   ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
+     std::string &outFileName )
 {
   typedef typename itk::ImageRegionConstIterator< InputImageType > ConstIterType2d;
   typedef typename itk::ImageRegionIteratorWithIndex< OutputImageType > IterType3d;
@@ -668,7 +705,8 @@ template<typename InputImageType, typename OutputImageType> void CastNWriteImage
   CreateDefaultCoordsNAllocateSpace<OutputImageType>( outputImage, size );
 
   //Cast n Write Values
-  itk::SizeValueType typeMax = itk::NumericTraits<typename OutputImageType::PixelType>::max();
+  itk::SizeValueType typeMax =
+		itk::NumericTraits<typename OutputImageType::PixelType>::max();
   for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
   {
     //Start index
@@ -676,7 +714,8 @@ template<typename InputImageType, typename OutputImageType> void CastNWriteImage
     typename InputImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
     typename InputImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
     region.SetSize( size ); region.SetIndex( start );
-    typename InputImageType::RegionType region2d; region2d.SetSize( size2d ); region2d.SetIndex( start2d );
+    typename InputImageType::RegionType region2d;
+    region2d.SetSize( size2d ); region2d.SetIndex( start2d );
     ConstIterType2d iter2d ( inputImage.at(i), region2d );
     IterType3d iter3d( outputImage, region );
     for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
@@ -1152,6 +1191,14 @@ int main(int argc, char *argv[])
 
   ComputeMeanImages( flAvgIm, AFAvgIm, BGAvgIm, labelImage,
 		     medFiltImages, numThreads );
+#ifdef DEBUG_MEAN_PROJECTIONS
+  std::string flAvgName = "flAvg.tif";
+  std::string AFAvgName = "AFAvg.tif";
+  std::string BGAvgName = "BGAvg.tif";
+  CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
+#endif
 
   try
   {
