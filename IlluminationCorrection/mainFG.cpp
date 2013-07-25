@@ -52,7 +52,7 @@
 #define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
-#define ORDER 4		//Order of the polynomial 1-4
+#define ORDER 4		//Order of the polynomial 2-4
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -64,13 +64,131 @@ typedef itk::Image< UCPixelType, Dimension3 > UC3ImageType;
 typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
 typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 
+std::string nameTemplate;
+
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
 	    << " " << funcName << " InputImage OutputImage NumberOfThreads(Optional-default=20)\n";
 }
 
-void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage, itk::SizeValueType i )
+template<typename InputImageType> void WriteITKImage
+  ( itk::SmartPointer<InputImageType> inputImagePointer,
+    std::string outputName )
+{
+  typedef typename itk::ImageFileWriter< InputImageType > WriterType;
+  typename WriterType::Pointer writer = WriterType::New();
+  writer->SetFileName( outputName.c_str() );
+  writer->SetInput( inputImagePointer );
+  try
+  {
+    writer->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  return;
+}
+
+template<typename InputImageType, typename OutputImageType> void CastNWriteImage
+  ( typename itk::SmartPointer<InputImageType> inputImage,
+    std::string &outFileName )
+{
+  typedef typename itk::CastImageFilter<InputImageType,
+  					OutputImageType> CastFilterType;
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"This function needs equal input and output dimensions";
+    return;
+  }
+  typename CastFilterType::Pointer cast = CastFilterType::New();
+  cast->SetInput( inputImage );
+  WriteITKImage< OutputImageType >( cast->GetOutput(), outFileName );
+  return;
+}
+
+template<typename InputImageType> void CreateDefaultCoordsNAllocateSpace
+  ( itk::SmartPointer<InputImageType> inputImagePointer,
+    typename InputImageType::SizeType size )
+{
+  typename InputImageType::PointType origin;
+  typename InputImageType::IndexType start;
+  const int imDims = InputImageType::ImageDimension;
+  for( itk::IndexValueType i=0;
+       i<imDims; ++i )
+  {
+    origin[i] = 0; start[i] = 0;
+  }
+  typename InputImageType::RegionType region;
+  region.SetSize( size );
+  region.SetIndex( start );
+  inputImagePointer->SetOrigin( origin );
+  inputImagePointer->SetRegions( region );
+  inputImagePointer->Allocate();
+  inputImagePointer->FillBuffer(0);
+  try
+  {
+    inputImagePointer->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught !" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+}
+
+template<typename InputImageType, typename OutputImageType>
+  void CastNWriteImage2DStackOfVecsTo3D
+   ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
+     std::string &outFileName )
+{
+  typedef typename itk::ImageRegionConstIterator< InputImageType > ConstIterType2d;
+  typedef typename itk::ImageRegionIteratorWithIndex< OutputImageType > IterType3d;
+  typedef typename itk::ImageFileWriter< OutputImageType > WriterType;
+
+  //Check if input vector is 2D and output is 3D n print error if not
+  if( InputImageType::ImageDimension!=2 || OutputImageType::ImageDimension!=3 )
+  {
+    std::cout<<"ERROR: Utility expects a 2D image stack and outputs a 3D image.\n";
+    return;
+  }
+
+  //Allocate space
+  typename OutputImageType::Pointer outputImage = OutputImageType::New();
+  typename OutputImageType::SizeType size;
+  typename OutputImageType::IndexType start;
+  typename OutputImageType::RegionType region;
+  start[0] = 0; start[1] = 0;
+  size[0]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  size[1]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  size[2]  = inputImage.size();
+  CreateDefaultCoordsNAllocateSpace<OutputImageType>( outputImage, size );
+
+  //Cast n Write Values
+  itk::SizeValueType typeMax =
+		itk::NumericTraits<typename OutputImageType::PixelType>::max();
+  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
+  {
+    //Start index
+    start[2] = i; size[2] = 1; //Reset for writing out the slices
+    typename InputImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
+    typename InputImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
+    region.SetSize( size ); region.SetIndex( start );
+    typename InputImageType::RegionType region2d;
+    region2d.SetSize( size2d ); region2d.SetIndex( start2d );
+    ConstIterType2d iter2d ( inputImage.at(i), region2d );
+    IterType3d iter3d( outputImage, region );
+    for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
+      iter3d.Set( (typename OutputImageType::PixelType)std::floor( iter2d.Get()+0.5 ) );
+  }
+  WriteITKImage< OutputImageType >( outputImage, outFileName );
+  return;
+}
+
+void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage,
+		itk::SizeValueType i )
 {
   typedef itk::ExtractImageFilter< US3ImageType, US2ImageType > DataExtractType;
   DataExtractType::Pointer deFilter = DataExtractType::New();
@@ -342,14 +460,14 @@ void returnthresh
   calculator->SetNumberOfThresholds( num_bin_levs );
   calculator->SetInputHistogram( histogram );
   calculator->Update();
-  std::cout<<"Threshold computed: "<<std::flush;
+  std::cout<<"Threshold computed: ";
   const CalculatorType::OutputType &thresholdVector = calculator->GetOutput(); 
   CalculatorType::OutputType::const_iterator itNum = thresholdVector.begin();
 
   for(US3ImageType::PixelType i=0; i < num_bin_levs; ++itNum, ++i)
   {
     returnVec.at(i) = (static_cast<float>(*itNum))+minval;
-    std::cout<<returnVec.at(i)<<std::endl<<std::flush;
+    std::cout<<returnVec.at(i)<<std::endl;
   }
   return;
 }
@@ -382,28 +500,16 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
   }
 
 #ifdef NOISE_THR_DEBUG
-  typedef itk::ImageFileWriter< US2ImageType > WriterType;
-  WriterType::Pointer writer = WriterType::New();
-  writer->SetFileName( "minIntProj.tif" );
-  writer->SetInput( minIntProjFilt->GetOutput() );
-  WriterType::Pointer writer1 = WriterType::New();
-  writer1->SetFileName( "maxIntProj.tif" );
-  writer1->SetInput( maxIntProjFilt->GetOutput() );
-  try
-  {
-    writer->Update();
-    writer1->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
+  std::string minIntPFileName = nameTemplate + "minIntProj.tif";
+  WriteITKImage< US2ImageType >( minIntProjFilt->GetOutput(), minIntPFileName );
+  std::string maxIntPFileName = nameTemplate + "maxIntProj.tif";
+  WriteITKImage< US2ImageType >( maxIntProjFilt->GetOutput(), maxIntPFileName );
   itk::SizeValueType countCorrected = 0;
 #endif //NOISE_THR_DEBUG
 
   std::cout<<"Size: "<< minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[0]
-  		<< " " << minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[1];
+  	<< " " << minIntProjFilt->GetOutput()->GetLargestPossibleRegion().GetSize()[1]
+	<< std::endl;
 
   std::vector< US2ImageType::PixelType > thresholdVec(1,0);
   returnthresh( maxIntProjFilt->GetOutput(), 1, thresholdVec );
@@ -449,51 +555,10 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
   }
 #ifdef NOISE_THR_DEBUG
   std::cout<<"countCorrected = "<<countCorrected<<std::endl;
-  typedef itk::ImageFileWriter< US3ImageType > WriterType3d;
-  WriterType3d::Pointer writer3d = WriterType3d::New();
-  writer3d->SetFileName( "noisecorrected.tif" );
-  writer3d->SetInput( InputImage );
-  try
-  {
-    writer3d->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
+  std::string noiseThrFileName = nameTemplate + "noisecorrected.tif";
+  WriteITKImage< US3ImageType >( InputImage, noiseThrFileName );
 #endif //NOISE_THR_DEBUG
   return (US3ImageType::PixelType) thresholdVec.at(0);
-}
-
-template<typename InputImageType> void CreateDefaultCoordsNAllocateSpace
-  ( itk::SmartPointer<InputImageType> inputImagePointer,
-    typename InputImageType::SizeType size )
-{
-  typename InputImageType::PointType origin;
-  typename InputImageType::IndexType start;
-  const int imDims = InputImageType::ImageDimension;
-  for( itk::IndexValueType i=0;
-       i<imDims; ++i )
-  {
-    origin[i] = 0; start[i] = 0;
-  }
-  typename InputImageType::RegionType region;
-  region.SetSize( size );
-  region.SetIndex( start );
-  inputImagePointer->SetOrigin( origin );
-  inputImagePointer->SetRegions( region );
-  inputImagePointer->Allocate();
-  inputImagePointer->FillBuffer(0);
-  try
-  {
-    inputImagePointer->Update();
-  }
-  catch( itk::ExceptionObject & excep )
-  {
-    std::cerr << "Exception caught !" << excep << std::endl;
-    exit (EXIT_FAILURE);
-  }
 }
 
 void ComputeCosts( int numThreads,
@@ -511,8 +576,10 @@ void ComputeCosts( int numThreads,
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIterator< CostImageType > CostIterType;
   typedef itk::ImageRegionIterator< US3ImageType > IterTypeUS3d;
-  itk::IndexValueType numCol = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
-  itk::IndexValueType numRow = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
+  itk::IndexValueType numCol =  medFiltImages.at(0)->
+				GetLargestPossibleRegion().GetSize()[1];
+  itk::IndexValueType numRow =  medFiltImages.at(0)->
+				GetLargestPossibleRegion().GetSize()[0];
   itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5)
 			      -(itk::IndexValueType)floor(((double)CWin)/2+0.5);
 
@@ -539,9 +606,12 @@ void ComputeCosts( int numThreads,
       US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
       std::vector< double > parameters( 5, 0 );
       computePoissonParams( histogram, parameters );
-      std::vector< double > pdf0( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(0), pdf0 );
-      std::vector< double > pdf1( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(1), pdf1 );
-      std::vector< double > pdf2( histogram.size()+1, 1 ); ComputePoissonProbability( parameters.at(2), pdf2 );
+      std::vector< double > pdf0( histogram.size()+1, 1 );
+      ComputePoissonProbability( parameters.at(0), pdf0 );
+      std::vector< double > pdf1( histogram.size()+1, 1 );
+      ComputePoissonProbability( parameters.at(1), pdf1 );
+      std::vector< double > pdf2( histogram.size()+1, 1 );
+      ComputePoissonProbability( parameters.at(2), pdf2 );
 #ifdef DEBUG_RESCALING_N_COST_EST
       if( !omp_get_thread_num() )
       {
@@ -643,100 +713,6 @@ void ComputeCosts( int numThreads,
   return;
 }
 
-template<typename InputImageType, typename OutputImageType> void CastNWriteImage
-  ( typename itk::SmartPointer<InputImageType> inputImage,
-    std::string &outFileName )
-{
-  typedef typename itk::CastImageFilter<InputImageType,
-  					OutputImageType> CastFilterType;
-  typedef typename itk::ImageFileWriter< OutputImageType > WriterType;
-
-  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
-  {
-    std::cout<<"This function needs equal input and output dimensions";
-    return;
-  }
-
-  typename CastFilterType::Pointer cast = CastFilterType::New();
-  cast->SetInput( inputImage );
-
-  typename WriterType::Pointer writer = WriterType::New();
-  writer = WriterType::New();
-  writer->SetFileName( outFileName.c_str() );
-  writer->SetInput( cast->GetOutput() );
-  try
-  {
-    writer->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
-  return;
-}
-
-
-template<typename InputImageType, typename OutputImageType>
-  void CastNWriteImage2DStackOfVecsTo3D
-   ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
-     std::string &outFileName )
-{
-  typedef typename itk::ImageRegionConstIterator< InputImageType > ConstIterType2d;
-  typedef typename itk::ImageRegionIteratorWithIndex< OutputImageType > IterType3d;
-  typedef typename itk::ImageFileWriter< OutputImageType > WriterType;
-
-  //Check if input vector is 2D and output is 3D n print error if not
-  if( InputImageType::ImageDimension!=2 || OutputImageType::ImageDimension!=3 )
-  {
-    std::cout<<"ERROR: Utility expects a 2D image stack and outputs a 3D image.\n";
-    return;
-  }
-
-  //Allocate space
-  typename OutputImageType::Pointer outputImage = OutputImageType::New();
-  typename OutputImageType::SizeType size;
-  typename OutputImageType::IndexType start;
-  typename OutputImageType::RegionType region;
-  start[0] = 0; start[1] = 0;
-  size[0]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
-  size[1]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
-  size[2]  = inputImage.size();
-  CreateDefaultCoordsNAllocateSpace<OutputImageType>( outputImage, size );
-
-  //Cast n Write Values
-  itk::SizeValueType typeMax =
-		itk::NumericTraits<typename OutputImageType::PixelType>::max();
-  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
-  {
-    //Start index
-    start[2] = i; size[2] = 1; //Reset for writing out the slices
-    typename InputImageType::IndexType start2d; start2d[0] = 0;      start2d[1] = 0;
-    typename InputImageType::SizeType  size2d;   size2d[0] = size[0]; size2d[1] = size[1];
-    region.SetSize( size ); region.SetIndex( start );
-    typename InputImageType::RegionType region2d;
-    region2d.SetSize( size2d ); region2d.SetIndex( start2d );
-    ConstIterType2d iter2d ( inputImage.at(i), region2d );
-    IterType3d iter3d( outputImage, region );
-    for( ; !iter2d.IsAtEnd(); ++iter2d, ++iter3d )
-      iter3d.Set( (typename OutputImageType::PixelType)std::floor( iter2d.Get()+0.5 ) );
-  }
-  typename WriterType::Pointer writer = WriterType::New();
-  writer = WriterType::New();
-  writer->SetFileName( outFileName.c_str() );
-  writer->SetInput( outputImage );
-  try
-  {
-    writer->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
-  return;
-}
-
 void ComputeCut( itk::IndexValueType slice,
 		 std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
 		 std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
@@ -823,6 +799,43 @@ void ComputeCut( itk::IndexValueType slice,
   delete graph;
 }
 
+void GetLock( CostImageType::Pointer MutexIm, CostImageType::IndexType Index, int tid )
+{
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  bool lockSucceeded = false;
+  CostImageType::PixelType tidDouble = (CostImageType::PixelType)tid;
+  CostImageType::SizeType  size;  size[0] = 1;  size[1] = 1;
+  CostImageType::RegionType region;
+  region.SetSize( size ); region.SetIndex( Index );
+  CostIterType MutexIter( MutexIm, region );
+  while( !lockSucceeded )
+  {
+    if( MutexIter.Get() )
+      for( unsigned i=0; i<10; ++i );//Waste time
+    else
+    {
+#pragma omp critical
+{
+      if( !MutexIter.Get() )
+      {
+        lockSucceeded = true;
+	MutexIter.Set( tidDouble );
+      }
+}
+    }
+  }
+}
+
+void ReleaseLock( CostImageType::Pointer MutexIm, CostImageType::IndexType Index )
+{
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  CostImageType::SizeType  size;  size[0] = 1;  size[1] = 1;
+  CostImageType::RegionType region;
+  region.SetSize( size ); region.SetIndex( Index );
+  CostIterType MutexIter( MutexIm, region );
+  MutexIter.Set( 0 );
+}
+
 void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, UC3ImageType::Pointer labelImage,
   std::vector< itk::SmartPointer<US2ImageType>  > &medFiltIms, int numThreads )
@@ -842,14 +855,15 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
   CreateDefaultCoordsNAllocateSpace<CostImageType>( flAvgCount, size );
   CreateDefaultCoordsNAllocateSpace<CostImageType>( AFAvgCount, size );
 
+  CostImageType::Pointer MutexIm = CostImageType::New();
+  CreateDefaultCoordsNAllocateSpace<CostImageType>( MutexIm, size );
+
   //The background needs a vector pixels on a 2D grid to be sorted
   std::vector< std::vector<US2ImageType::PixelType> > pixelVectForBG;
   pixelVectForBG.resize(size[0]*size[1]);
   for( itk::IndexValueType k=0; k<(size[0]*size[1]); ++k )
     pixelVectForBG.at(k).resize( medFiltIms.size() );
 
-  for( itk::IndexValueType k=0; k<medFiltIms.size(); ++k )
-  {
 #ifdef _OPENMP
 #if _OPENMP >= 200805L
   #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
@@ -857,55 +871,63 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
   #pragma omp parallel for
 #endif
 #endif
-    for( itk::IndexValueType i=0; i<size[0]; ++i )
-    {
-      //Declare iterators for each row
-      CostImageType::SizeType  sizeRow;  sizeRow[0]  = 1;  sizeRow[1] = size[1];
-      CostImageType::IndexType startRow; startRow[0] = i; startRow[1] = 0; 
-      CostImageType::RegionType region;
-      region.SetSize( sizeRow ); region.SetIndex( startRow );
-      //Average and count iterators
-      CostIterType flAvgImIter( flAvgIm, region ), flAvgCountIter( flAvgCount, region );
-      CostIterType AFAvgImIter( AFAvgIm, region ), AFAvgCountIter( AFAvgCount, region );
-      flAvgImIter.GoToBegin(); flAvgCountIter.GoToBegin(); AFAvgImIter.GoToBegin();
-      AFAvgCountIter.GoToBegin();
+  for( itk::IndexValueType k=0; k<medFiltIms.size(); ++k )
+  {
+    //Declare iterators for each row i
+    CostImageType::SizeType  sizeRow;  sizeRow[0]  = size[0];  sizeRow[1] = size[1];
+    CostImageType::IndexType startRow; startRow[0] = 0; startRow[1] = 0; 
+    CostImageType::RegionType region;
+    region.SetSize( sizeRow ); region.SetIndex( startRow );
+    //Average and count iterators
+    CostIterType flAvgImIter( flAvgIm, region ), flAvgCountIter( flAvgCount, region );
+    CostIterType AFAvgImIter( AFAvgIm, region ), AFAvgCountIter( AFAvgCount, region );
+    flAvgImIter.GoToBegin(); flAvgCountIter.GoToBegin(); AFAvgImIter.GoToBegin();
+    AFAvgCountIter.GoToBegin();
 
-      //Median image iterator
-      US2IterType medFiltImIter( medFiltIms.at(k), region ); medFiltImIter.GoToBegin();
+    //Median image iterator
+    US2IterType medFiltImIter( medFiltIms.at(k), region ); medFiltImIter.GoToBegin();
 
-      //Label image iterator
-      US3ImageType::SizeType sizeRow3d;
-      sizeRow3d[0] = 1; sizeRow3d[1] = size[1]; sizeRow[2] = 1;
-      US3ImageType::IndexType startRow3d;
-      startRow3d[0] = i; startRow3d[1] = 0; startRow3d[2] = k;
-      US3ImageType::RegionType region3d;
-      region3d.SetSize( sizeRow3d ); region3d.SetIndex( startRow3d );
-      UC3IterType labelImageIter( labelImage, region3d ); labelImageIter.GoToBegin();
+    //Label image iterator
+    US3ImageType::SizeType sizeRow3d;
+    sizeRow3d[0] = size[0]; sizeRow3d[1] = size[1]; sizeRow[2] = 1;
+    US3ImageType::IndexType startRow3d;
+    startRow3d[0] = 0; startRow3d[1] = 0; startRow3d[2] = k;
+    US3ImageType::RegionType region3d;
+    region3d.SetSize( sizeRow3d ); region3d.SetIndex( startRow3d );
+    UC3IterType labelImageIter( labelImage, region3d ); labelImageIter.GoToBegin();
 
-      for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++flAvgCountIter, ++AFAvgImIter,
+    for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++flAvgCountIter, ++AFAvgImIter,
 				++AFAvgCountIter, ++medFiltImIter, ++labelImageIter )
-      {
-        itk::IndexValueType indexValue2d = labelImageIter.GetIndex()[0]*size[1] + 
+    {
+      itk::IndexValueType indexValue2d = labelImageIter.GetIndex()[0]*size[1] + 
 						labelImageIter.GetIndex()[1];
-        if( !labelImageIter.Get() )
-	  pixelVectForBG.at( indexValue2d ).at(k) = medFiltImIter.Get();
-	else
-	  pixelVectForBG.at( indexValue2d ).at(k) = itk::NumericTraits<US2ImageType::PixelType>::max();
+      if( !labelImageIter.Get() )
+	pixelVectForBG.at( indexValue2d ).at(k) = medFiltImIter.Get();
+      else
+	pixelVectForBG.at( indexValue2d ).at(k) = 
+	  			itk::NumericTraits<US2ImageType::PixelType>::max();
 
-	if( labelImageIter.Get()==1 )
-	{
-	  AFAvgImIter.Set( (CostImageType::PixelType)medFiltImIter.Get() );
-	  double temp = AFAvgCountIter.Get()+1;
-	  AFAvgCountIter.Set( temp );
-	}
-	else if( labelImageIter.Get()==2 )
-	{
-	  flAvgImIter.Set( (CostImageType::PixelType)medFiltImIter.Get() );;
-	  double temp = flAvgCountIter.Get()+1;
-	  flAvgCountIter.Set( temp );
-	}
+      if( labelImageIter.Get()==1 )
+      {
+        //Get lock on MutexIm before continuing
+	GetLock( MutexIm, flAvgCountIter.GetIndex(), omp_get_thread_num() );
+	double tempValue = AFAvgImIter.Get()+medFiltImIter.Get();
+	AFAvgImIter.Set( tempValue );
+	double tempCount = AFAvgCountIter.Get()+1;
+	AFAvgCountIter.Set( tempCount );
+	ReleaseLock( MutexIm, flAvgCountIter.GetIndex() );
+      }
+      else if( labelImageIter.Get()==2 )
+      {
+	GetLock( MutexIm, flAvgCountIter.GetIndex(), omp_get_thread_num() );
+	double tempValue = flAvgImIter.Get()+medFiltImIter.Get();
+	flAvgImIter.Set( tempValue );
+	double tempCount = flAvgCountIter.Get()+1;
+	flAvgCountIter.Set( tempCount );
+	ReleaseLock( MutexIm, flAvgCountIter.GetIndex() );
       }
     }
+    std::cout<<k<<std::endl<<std::flush;
   }
   //Get Average images
   CostImageType::SizeType  sizeIm;  sizeIm[0]  = size[0];  sizeIm[1] = size[1];
@@ -931,6 +953,7 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
       AFAvgImIter.Set( std::numeric_limits<float>::max() );
   }
 
+  std::cout<<"Sorting for background pixels\n"<<std::endl<<std::flush;
   //Sort vectors to get the min of stacks at each pixel
 #ifdef _OPENMP
 #if _OPENMP >= 200805L
@@ -943,7 +966,7 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
     std::sort( pixelVectForBG.at(i).begin(), pixelVectForBG.at(i).end() );
 
   //Take the average of the bottom NN percent of the non-flour pixels
-  itk::SizeValueType NNPcIndex = std::floor(pixelVectForBG.size()/NN+0.5);
+  itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
   CostIterType BGAvgImIter( BGAvgIm, region ); 
   for( BGAvgImIter.GoToBegin(); BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
   {
@@ -951,7 +974,8 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
 						BGAvgImIter.GetIndex()[1];
     std::vector<US2ImageType::PixelType>::iterator low;
     low = std::lower_bound( pixelVectForBG.at(indexValue2d).begin(),
-		pixelVectForBG.at(indexValue2d).end(), itk::NumericTraits<US2ImageType::PixelType>::max() );
+			    pixelVectForBG.at(indexValue2d).end(),
+			    itk::NumericTraits<US2ImageType::PixelType>::max() );
     itk::IndexValueType validLength = low-pixelVectForBG.at(indexValue2d).begin();
     if( validLength>NNPcIndex )
       validLength = NNPcIndex;
@@ -968,15 +992,41 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
 }
 
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
-  CostImageType::Pointer BGAvgIm, double *flPolyCoeffs, double *AFPolyCoeffs,
-  double *BGPolyCoeffs )
+  CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
+  std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs )
 {
-  ;
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  std::vector<double>
+  XFl, YFl, X2Fl, Y2Fl, XYFl,
+  XAF, YAF, X2AF, Y2AF, XYAF,
+  XBG, YBG, X2BG, Y2BG, XYBG
+#if ORDER>2
+	, X3Fl, X2YFl, XY2Fl, Y3Fl
+	, X3AF, X2YAF, XY2AF, Y3AF
+	, X3BG, X2YBG, XY2BG, Y3BG
+#endif
+#if ORDER>3
+	, X4Fl, X3YFl, X2Y2Fl, XY3Fl, Y4Fl
+	, X4AF, X3YAF, X2Y2AF, XY3AF, Y4AF
+	, X4BG, X3YBG, X2Y2BG, XY3BG, Y4BG
+#endif
+	;
+  //Iterate through the images and pick out the indices and values
+  CostIterType  flAvgImIter( flAvgIm, flAvgIm->GetLargestPossibleRegion() ),
+		BGAvgImIter( BGAvgIm, BGAvgIm->GetLargestPossibleRegion() ),
+		AFAvgImIter( AFAvgIm, AFAvgIm->GetLargestPossibleRegion() );
+  flAvgImIter.GoToBegin(); BGAvgImIter.GoToBegin(); AFAvgImIter.GoToBegin();
+  for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++BGAvgImIter, ++AFAvgImIter )
+  {
+    ;
+  }
+
+  return;
 }
 
 int main(int argc, char *argv[])
 {
-  if( argc < 3 )
+  if( argc < 2 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
@@ -985,13 +1035,15 @@ int main(int argc, char *argv[])
   }
 
   std::string inputImageName = argv[1]; //Name of the input image
-  std::string labelImageName = argv[2];
+  unsigned found = inputImageName.find_last_of(".");
+  nameTemplate = inputImageName.substr(0,found) + "_";
   int numThreads = 24;
-  if( argc == 4 )
-    numThreads = atoi( argv[3] );
+  if( argc == 3 )
+    numThreads = atoi( argv[2] );
+  double reducedThreadsDbl = std::floor((double)numThreads*0.9);
+  int reducedThreads = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
-  typedef itk::ImageFileWriter< UC3ImageType >    WriterType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > IterType;
@@ -1088,7 +1140,7 @@ int main(int argc, char *argv[])
   CastNWriteImage2DStackOfVecsTo3D<US2ImageType,US3ImageType>( medFiltImages, OutFiles );
 #endif //DEBUG_RESCALING_N_COST_EST
 
-  std::cout<<"Done! Starting to compute costs\n"<<std::flush;
+  std::cout<<"Done! Starting to compute costs\n";
 
   US3ImageType::PixelType valsPerBin = 1;
   while( ((double)(upperThreshold+1)/(double)valsPerBin) > NumBins )
@@ -1118,31 +1170,20 @@ int main(int argc, char *argv[])
 
   //Copy into 3d image
   UC3ImageType::Pointer labelImage = UC3ImageType::New();
-  UC3ImageType::PointType origin;
-  origin[0] = 0; origin[1] = 0; origin[2] = 0;
-  labelImage->SetOrigin( origin );
-  UC3ImageType::IndexType start;
-  start[0] = 0; start[1] = 0; start[2] = 0;
   UC3ImageType::SizeType  size;
   size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
   size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
   size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
-  UC3ImageType::RegionType region;
-  region.SetSize( size );
-  region.SetIndex( start );
-  labelImage->SetRegions( region );
-  labelImage->Allocate();
-  labelImage->FillBuffer(0);
-  labelImage->Update();
+  CreateDefaultCoordsNAllocateSpace<UC3ImageType>( labelImage, size );
 
-  std::cout<<"Done! Starting Cuts\n"<<std::flush;
+  std::cout<<"Done! Starting Cuts\n";
   unsigned count = 0;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
-  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+  #pragma omp parallel for schedule(dynamic,1) num_threads(reducedThreads)
 #else
-  #pragma omp parallel for num_threads(numThreads)
+  #pragma omp parallel for num_threads(reducedThreads)
 #endif
 #endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
@@ -1157,7 +1198,7 @@ int main(int argc, char *argv[])
     {
       ++count;
       if( !( (unsigned)std::floor((double)count*100.0/(double)numSlices)%(unsigned)10 ) )
-	std::cout<<(unsigned)((double)count*100.0/(double)numSlices)<<"\% Done\r"<<std::flush;
+	std::cout<<(unsigned)((double)count*100.0/(double)numSlices)<<"\% Done\r";
     }
   }
   autoFlourCosts.clear();
@@ -1167,22 +1208,9 @@ int main(int argc, char *argv[])
 
   std::cout<<std::endl;
 
-  std::cout<<"Cuts Done! Writing three level separation image\n"
-  	   <<std::flush;
-
-  WriterType::Pointer writer = WriterType::New();
-  writer = WriterType::New();
-  writer->SetFileName( labelImageName.c_str() );
-  writer->SetInput( labelImage );
-  try
-  {
-    writer->Update();
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
+  std::cout<<"Cuts Done! Writing three level separation image\n";
+  std::string labelImageName = nameTemplate + "label.tif";
+  WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 
   //Make pointers for the flour, autoflour n bg avg images
   CostImageType::Pointer flAvgIm = CostImageType::New();
@@ -1190,7 +1218,7 @@ int main(int argc, char *argv[])
   CostImageType::Pointer BGAvgIm = CostImageType::New();
 
   ComputeMeanImages( flAvgIm, AFAvgIm, BGAvgIm, labelImage,
-		     medFiltImages, numThreads );
+		     medFiltImages, reducedThreads );
 #ifdef DEBUG_MEAN_PROJECTIONS
   std::string flAvgName = "flAvg.tif";
   std::string AFAvgName = "AFAvg.tif";
@@ -1199,6 +1227,14 @@ int main(int argc, char *argv[])
   CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
   CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
 #endif
+
+  std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
+
+  unsigned numCoeffs = ((ORDER+1)*(ORDER+2))/2-1;
+  std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
+			BGPolyCoeffs(numCoeffs,0);
+
+  ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs );
 
   try
   {
