@@ -49,8 +49,8 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
-#define WinSz 512	//Histogram computed on this window
-#define CWin  256	//This is half the inner window
+#define WinSz 256	//Histogram computed on this window
+#define CWin  256//32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define ORDER 4		//Order of the polynomial 2-4
@@ -824,22 +824,21 @@ void ComputeCut( itk::IndexValueType slice,
   delete graph;
 }
 
-void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
-  CostImageType::Pointer BGAvgIm, UC3ImageType::Pointer labelImage,
-  std::vector< itk::SmartPointer<US2ImageType>  > &medFiltIms, int numThreads )
+std::vector< itk::SmartPointer< CostImageType > >
+  ComputeMeanImages ( UC3ImageType::Pointer labelImage,
+	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltIms, int numThreads )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< CostImageType3d > CostIterType3d;
   typedef itk::ImageRegionIteratorWithIndex< US2ImageType > US2IterType;
   typedef itk::ImageRegionIteratorWithIndex< UC3ImageType > UC3IterType;
-  std::cout<<"Fn starting\n"<<std::flush;
 
   US2ImageType::SizeType size;
   size[0] = medFiltIms.at(0)->GetLargestPossibleRegion().GetSize()[0];
   size[1] = medFiltIms.at(0)->GetLargestPossibleRegion().GetSize()[1];
+  CostImageType::Pointer BGAvgIm = CostImageType::New();
   CreateDefaultCoordsNAllocateSpace<CostImageType>( BGAvgIm, size );
 
-  std::cout<<"Size recvd\n"<<std::flush;
   US3ImageType::SizeType size3dd;
   size3dd[0] = size[0]; size3dd[1] = size[1]; size3dd[2] = numThreads;
   CostImageType3d::Pointer flAvgCounts = CostImageType3d::New();
@@ -850,7 +849,6 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
   CreateDefaultCoordsNAllocateSpace<CostImageType3d>( AFAvgCounts, size3dd );
   CreateDefaultCoordsNAllocateSpace<CostImageType3d>( flAvgIms,    size3dd );
   CreateDefaultCoordsNAllocateSpace<CostImageType3d>( AFAvgIms,    size3dd );
-  std::cout<<"Imms allcd\n"<<std::flush;
 
   //The background needs a vector pixels on a 2D grid to be sorted
   std::vector< std::vector<US2ImageType::PixelType> > pixelVectForBG;
@@ -858,7 +856,6 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
   for( itk::IndexValueType k=0; k<(size[0]*size[1]); ++k )
     pixelVectForBG.at(k).resize( medFiltIms.size() );
 
-  std::cout<<"Space allocated for various images\n"<<std::flush;
 #ifdef _OPENMP
 #if _OPENMP >= 200805L
   #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
@@ -922,14 +919,15 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
       }
     }
   }
-  std::cout<<"Projecting sums\n"<<std::flush;
 
   CostImageType::Pointer flAvgCount =
 	SumProject3dImageTo2d<CostImageType3d,CostImageType>( flAvgCounts );
   CostImageType::Pointer AFAvgCount =
 	SumProject3dImageTo2d<CostImageType3d,CostImageType>( AFAvgCounts );
-  flAvgIm = SumProject3dImageTo2d<CostImageType3d,CostImageType>( flAvgIms );
-  AFAvgIm = SumProject3dImageTo2d<CostImageType3d,CostImageType>( AFAvgIms );
+  CostImageType::Pointer flAvgIm =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( flAvgIms );
+  CostImageType::Pointer AFAvgIm =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( AFAvgIms );
 
   //Average and count iterators
   CostIterType  flAvgImIter( flAvgIm, flAvgIm->GetLargestPossibleRegion() ),
@@ -938,7 +936,6 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
 		AFAvgCountIter( AFAvgCount, AFAvgCount->GetLargestPossibleRegion() );
   flAvgImIter.GoToBegin(); flAvgCountIter.GoToBegin();
   AFAvgImIter.GoToBegin(); AFAvgCountIter.GoToBegin();
-  std::cout<<"Divide by the average\n"<<std::flush;
   //Divide by counts to get average
   for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++flAvgCountIter, ++AFAvgImIter,
   				 ++AFAvgCountIter )
@@ -953,9 +950,6 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
       AFAvgImIter.Set( std::numeric_limits<float>::max() );
   }
 
-  std::cout<<"Sorting for background pixels\n"
-	<<BGAvgIm->GetLargestPossibleRegion()
-	<<std::endl<<std::flush;
   //Sort vectors to get the min of stacks at each pixel
 #ifdef _OPENMP
 #if _OPENMP >= 200805L
@@ -965,7 +959,10 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
 #endif
 #endif
   for( itk::IndexValueType i=0; i<pixelVectForBG.size(); ++i )
+  {
     std::sort( pixelVectForBG.at(i).begin(), pixelVectForBG.at(i).end() );
+    std::cout<<pixelVectForBG.at(i).front()<<"\t";
+  }
 
   //Take the average of the bottom NN percent of the non-flour pixels
   itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
@@ -991,7 +988,12 @@ void ComputeMeanImages( CostImageType::Pointer flAvgIm, CostImageType::Pointer A
       BGAvgImIter.Set( average );
     }
   }
-  std::cout<<flAvgIm<<AFAvgIm<<BGAvgIm<<std::flush;
+  std::vector< itk::SmartPointer< CostImageType > > returnVec;
+  returnVec.push_back( flAvgIm ); flAvgIm->Register();
+  returnVec.push_back( AFAvgIm ); AFAvgIm->Register();
+  returnVec.push_back( BGAvgIm ); BGAvgIm->Register();
+
+  return returnVec;
 }
 
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
@@ -1057,6 +1059,7 @@ int main(int argc, char *argv[])
     numThreads = atoi( argv[2] );
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
+  std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
@@ -1229,12 +1232,20 @@ int main(int argc, char *argv[])
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 #endif
 
+  std::cout<<"Comuting mean Images\n"<<std::flush;
+  std::vector< itk::SmartPointer< CostImageType > > avgImsVec = 
+	ComputeMeanImages( labelImage, medFiltImages, numThreads );
+
+  unsigned numCoeffs = ((ORDER+1)*(ORDER+2))/2-1;
+  std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
+			BGPolyCoeffs(numCoeffs,0);
+
+{
   //Make pointers for the flour, autoflour n bg avg images
   CostImageType::Pointer flAvgIm, AFAvgIm, BGAvgIm;
+  flAvgIm = avgImsVec.at(0); AFAvgIm = avgImsVec.at(1);
+  BGAvgIm = avgImsVec.at(2);
 
-  std::cout<<"Comuting mean Images\n"<<std::flush;
-  ComputeMeanImages( flAvgIm, AFAvgIm, BGAvgIm, labelImage,
-		     medFiltImages, numThreads );
 #ifdef DEBUG_MEAN_PROJECTIONS
   std::cout<<flAvgIm<<AFAvgIm<<BGAvgIm<<std::flush;
   std::string flAvgName = nameTemplate + "flAvg.tif";
@@ -1247,11 +1258,10 @@ int main(int argc, char *argv[])
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
 
-  unsigned numCoeffs = ((ORDER+1)*(ORDER+2))/2-1;
-  std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
-			BGPolyCoeffs(numCoeffs,0);
-
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs );
+  flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
+  avgImsVec.clear();
+}
 
   try
   {
