@@ -50,10 +50,13 @@
 #include "itkOtsuMultipleThresholdsCalculator.h"
 
 #define WinSz 256	//Histogram computed on this window
-#define CWin  256//32	//This is half the inner window
+#define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
+#define MinMax 100	//Number of pixels used to compute the min/max
+
 #define ORDER 4		//Order of the polynomial 2-4
+#define numCoeffs 14    //((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -109,7 +112,7 @@ template<typename InputImageType, typename OutputImageType>
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught !" << excep << std::endl;
+    std::cerr << "Exception caught sum projection filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   typename OutputImageType::Pointer outputImage = sumProjFiltFlIm->GetOutput();
@@ -159,7 +162,7 @@ template<typename InputImageType> void CreateDefaultCoordsNAllocateSpace
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught !" << excep << std::endl;
+    std::cerr << "Exception caught in allocating space for image!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
 }
@@ -229,7 +232,7 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught !" << excep << std::endl;
+    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   currentTile = deFilter->GetOutput();
@@ -520,7 +523,7 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught !" << excep << std::endl;
+    std::cerr << "Exception caught in min/max intensity projection!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
 
@@ -996,9 +999,25 @@ std::vector< itk::SmartPointer< CostImageType > >
   return returnVec;
 }
 
+typedef std::vector<double> DblVec;
+void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec &ImVals,
+	DblVec &normConstants, unsigned normIndex //Idex to store the normalization consts
+#if ORDER>2
+		, DblVec X3, DblVec X2Y, DblVec XY2, DblVec Y3
+#endif
+#if ORDER>3
+		, DblVec X4, DblVec X3Y, DblVec X2Y2, DblVec XY3, DblVec Y4
+#endif
+		, DblVec &outCoeffs )
+{
+//  NormalizeAllNStoreNormConsts( X, Y, .... );
+  return;
+}
+
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
-  std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs )
+  std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
+  std::vector<double> &normConstants )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   std::vector<double>
@@ -1017,26 +1036,256 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
   flAvgImIter.GoToBegin(); BGAvgImIter.GoToBegin(); AFAvgImIter.GoToBegin();
   for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++BGAvgImIter, ++AFAvgImIter )
   {
-    if( flAvgImIter.Get()<std::numeric_limits<float>::max() &&
-	BGAvgImIter.Get()<std::numeric_limits<float>::max() &&
-	AFAvgImIter.Get()<std::numeric_limits<float>::max() )
-    {
-      Y.push_back( flAvgImIter.GetIndex()[0] ); X.push_back( flAvgImIter.GetIndex()[1] );
-      X2.push_back( X.back()*X.back() ); Y2.push_back( Y.back()*Y.back() );
-      XY.push_back( X.back()*Y.back() );
-      FlVals.push_back( flAvgImIter.Get() ); AFVals.push_back( AFAvgImIter.Get() );
-      BGVals.push_back( BGAvgImIter.Get() );
+    X.push_back( flAvgImIter.GetIndex()[1] ); Y.push_back( flAvgImIter.GetIndex()[0] );
+    X2.push_back( X.back()*X.back() ); Y2.push_back( Y.back()*Y.back() );
+    XY.push_back( X.back()*Y.back() );
+    FlVals.push_back( flAvgImIter.Get() ); AFVals.push_back( AFAvgImIter.Get() );
+    BGVals.push_back( BGAvgImIter.Get() );
 #if ORDER>2
-      X3.push_back( X2.back()*X.back() ); XY2.push_back( X.back()*Y2.back() );
-      Y3.push_back( Y.back()*Y2.back() );
+    X3.push_back( X2.back()*X.back() ); X2Y.push_back( X2.back()*Y.back() );
+    XY2.push_back( X.back()*Y2.back() ); Y3.push_back( Y.back()*Y2.back() );
 #endif
 #if ORDER>3
-      X4.push_back( X2.back()*X2.back() ); X3Y.push_back( X3.back()*Y.back() );
-      X2Y2.push_back( X2.back()*Y2.back() ); XY3.push_back( X.back()*Y3.back() );
-      Y4.push_back( Y2.back()*Y2.back() );
+    X4.push_back( X2.back()*X2.back() ); X3Y.push_back( X3.back()*Y.back() );
+    X2Y2.push_back( X2.back()*Y2.back() ); XY3.push_back( X.back()*Y3.back() );
+    Y4.push_back( Y2.back()*Y2.back() );
 #endif
-    }
   }
+  RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants, 0 //Idex to store the normalization consts
+#if ORDER>2
+		, X3, X2Y, XY2, Y3
+#endif
+#if ORDER>3
+		, X4, X3Y, X2Y2, XY3, Y4
+#endif
+		, flPolyCoeffs );
+  RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants, 2*numCoeffs
+  							  //Index to store the normalization consts
+#if ORDER>2
+		, X3, X2Y, XY2, Y3
+#endif
+#if ORDER>3
+		, X4, X3Y, X2Y2, XY3, Y4
+#endif
+		, AFPolyCoeffs );
+  RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants, 4*numCoeffs
+  							  //Idex to store the normalization consts
+#if ORDER>2
+		, X3, X2Y, XY2, Y3
+#endif
+#if ORDER>3
+		, X4, X3Y, X2Y2, XY3, Y4
+#endif
+		, BGPolyCoeffs );
+  return;
+}
+
+typedef struct
+{  double X, Y, X2, Y2, XY, FlVals, AFVals, BGVals
+#if ORDER>2
+	, X3, X2Y, XY2, Y3
+#endif
+#if ORDER>3
+	, X4, X3Y, X2Y2, XY3, Y4
+#endif
+	;
+} IndexStructType;
+
+void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
+	std::vector< IndexStructType > &IndexVector, std::vector<double> &normConstants,
+	std::vector<double> &flPolyCoeffs, std::vector<double> &AFPolyCoeffs,
+	std::vector<double> &BGPolyCoeffs )
+{
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
+  US3ImageType::SizeType size;
+  size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
+  size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
+
+  //Generate image indices
+  IndexVector.resize( size[0]*size[1] );
+
+  US3ImageType::IndexType start3d;
+  US3ImageType::SizeType  size3d;
+  US3ImageType::RegionType region3d;
+  start3d[0] = 0;      start3d[1] = 0;       start3d[2] = 0;
+   size3d[0] = size[0]; size3d[1] = size[1];  size3d[2] = 1;
+  region3d.SetSize( size3d ); region3d.SetIndex( start3d );
+  IterType3d iter3d( inputImage, region3d );
+  for( iter3d.GoToBegin(); !iter3d.IsAtEnd(); ++iter3d )
+  {
+    US3ImageType::IndexType index = iter3d.GetIndex();
+    IndexStructType currentIndex; //Check order in the estimation code
+    currentIndex.X = index[1];
+    currentIndex.Y = index[0];
+    currentIndex.X2 = currentIndex.X*currentIndex.X;
+    currentIndex.Y2 = currentIndex.Y*currentIndex.Y;
+    currentIndex.XY = currentIndex.X*currentIndex.Y;
+#if ORDER>2
+    currentIndex.X3  = currentIndex.X2*currentIndex.X;
+    currentIndex.X2Y = currentIndex.X2*currentIndex.Y;
+    currentIndex.XY2 = currentIndex.X*currentIndex.Y2;
+    currentIndex.Y3  = currentIndex.Y*currentIndex.Y2;
+#endif
+#if ORDER>3
+    currentIndex.X4   = currentIndex.X2*currentIndex.X2;
+    currentIndex.X3Y  = currentIndex.X3*currentIndex.Y;
+    currentIndex.X2Y2 = currentIndex.X2*currentIndex.Y2;
+    currentIndex.XY3  = currentIndex.X *currentIndex.Y3;
+    currentIndex.Y4   = currentIndex.Y2*currentIndex.Y2;
+#endif
+currentIndex.FlVals = flPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(0))
+			/normConstants.at(numCoeffs)
++flPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1)
++flPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2))/normConstants.at(numCoeffs+2)
++flPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(3))/normConstants.at(numCoeffs+3)
++flPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(4))/normConstants.at(numCoeffs+4)
+#if ORDER>2
++flPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(5))/normConstants.at(numCoeffs+5)
++flPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6)
++flPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(7))/normConstants.at(numCoeffs+7)
++flPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8)
+#endif
+#if ORDER>3
++flPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(9))/normConstants.at(numCoeffs+9)
++flPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10)
++flPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11)
++flPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12)
++flPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13)
+#endif
+;
+currentIndex.AFVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
+			/normConstants.at(3*numCoeffs)
++AFPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1)
++AFPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
++AFPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
++AFPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
+#if ORDER>2
++AFPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
++AFPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
++AFPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
++AFPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
+#endif
+#if ORDER>3
++AFPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(2*numCoeffs+9))
+		/normConstants.at(3*numCoeffs+9)
++AFPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(2*numCoeffs+10))
+		/normConstants.at(3*numCoeffs+10)
++AFPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(2*numCoeffs+11))
+		/normConstants.at(3*numCoeffs+11)
++AFPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(2*numCoeffs+12))
+		/normConstants.at(3*numCoeffs+12)
++AFPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(2*numCoeffs+13))
+		/normConstants.at(3*numCoeffs+13)
+#endif
+    ;
+currentIndex.BGVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
+			/normConstants.at(3*numCoeffs)
++AFPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1)
++AFPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
++AFPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
++AFPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
+#if ORDER>2
++AFPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
++AFPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
++AFPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
++AFPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
+#endif
+#if ORDER>3
++AFPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(2*numCoeffs+9))
+		/normConstants.at(3*numCoeffs+9)
++AFPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(2*numCoeffs+10))
+		/normConstants.at(3*numCoeffs+10)
++AFPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(2*numCoeffs+11))
+		/normConstants.at(3*numCoeffs+11)
++AFPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(2*numCoeffs+12))
+		/normConstants.at(3*numCoeffs+12)
++AFPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(2*numCoeffs+13))
+		/normConstants.at(3*numCoeffs+13)
+#endif
+    ;
+  }
+  return;
+}
+
+bool flMax( const IndexStructType &a, const IndexStructType &b)
+{ return a.FlVals > b.FlVals; }
+bool flMin( const IndexStructType &a, const IndexStructType &b)
+{ return a.FlVals < b.FlVals; }
+bool AFMax( const IndexStructType &a, const IndexStructType &b)
+{ return a.AFVals > b.AFVals; }
+bool AFMin( const IndexStructType &a, const IndexStructType &b)
+{ return a.AFVals < b.AFVals; }
+bool BGMax( const IndexStructType &a, const IndexStructType &b)
+{ return a.BGVals > b.BGVals; }
+bool BGMin( const IndexStructType &a, const IndexStructType &b)
+{ return a.BGVals < b.BGVals; }
+
+double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
+	CostImageType::Pointer flAvgIm, unsigned channel, bool minMax )
+{
+  double returnValue=0;
+  if( channel==0 )
+    if( minMax )
+      std::sort( IndexVector.begin(), IndexVector.end(), flMax );
+  else if( channel==1 )
+    if( minMax )
+      std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
+  else
+    if( minMax )
+      std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
+  itk::SizeValueType first = 0;
+  if( minMax )
+    for( itk::SizeValueType i=0; i<IndexVector.size(); ++i )
+    {
+      if( channel==0 )
+	if( IndexVector.at(i).FlVals < std::numeric_limits<float>::max() )
+	  break;
+      if( channel==1 )
+	if( IndexVector.at(i).AFVals < std::numeric_limits<float>::max() )
+	  break;
+      if( channel==2 )
+	if( IndexVector.at(i).BGVals < std::numeric_limits<float>::max() )
+	  break;
+    }
+  if( minMax )
+    for( itk::SizeValueType i = first; i<(first+MinMax); ++i )
+    {
+      if( channel==0 ) returnValue += IndexVector.at(i).FlVals;
+      if( channel==1 ) returnValue += IndexVector.at(i).AFVals;
+      if( channel==2 ) returnValue += IndexVector.at(i).BGVals;
+    }
+  else
+    for( itk::SizeValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
+    {
+      if( channel==0 ) returnValue += IndexVector.at(i).FlVals;
+      if( channel==1 ) returnValue += IndexVector.at(i).AFVals;
+      if( channel==2 ) returnValue += IndexVector.at(i).BGVals;
+    }
+  returnValue /= ((double)MinMax);
+  return returnValue;
+}
+
+void CorrectImages( std::vector<double> &flPolyCoeffs,
+	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
+	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
+	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
+	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm )
+{
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
+  US3ImageType::SizeType size;
+  size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
+  size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
+  std::vector< IndexStructType > IndexVector;
+  GetSurfaceForIndices( inputImage, IndexVector, normConstants, flPolyCoeffs, AFPolyCoeffs,
+  			BGPolyCoeffs );
+  double flMax = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 1 );
+  double flMin = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 0 );
+  double AFMax = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 1 );
+  double AFMin = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
+  double BGMax = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 );
+  double BGMin = BGMax-(AFMax-AFMin);
 
   return;
 }
@@ -1063,9 +1312,6 @@ int main(int argc, char *argv[])
 
   typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
-  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
-  typedef itk::ImageRegionIteratorWithIndex< US2ImageType > IterType;
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
 
   ReaderType::Pointer reader = ReaderType::New();
   reader = ReaderType::New();
@@ -1124,7 +1370,7 @@ int main(int argc, char *argv[])
     }
     catch( itk::ExceptionObject & excep )
     {
-      std::cerr << "Exception caught !" << excep << std::endl;
+      std::cerr << "Exception caught median filter!" << excep << std::endl;
       exit (EXIT_FAILURE);
     }
     US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
@@ -1158,7 +1404,7 @@ int main(int argc, char *argv[])
   CastNWriteImage2DStackOfVecsTo3D<US2ImageType,US3ImageType>( medFiltImages, OutFiles );
 #endif //DEBUG_RESCALING_N_COST_EST
 
-  std::cout<<"Done! Starting to compute costs\n";
+  std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
   US3ImageType::PixelType valsPerBin = 1;
   while( ((double)(upperThreshold+1)/(double)valsPerBin) > NumBins )
@@ -1194,7 +1440,7 @@ int main(int argc, char *argv[])
   size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
   CreateDefaultCoordsNAllocateSpace<UC3ImageType>( labelImage, size );
 
-  std::cout<<"Done! Starting Cuts\n";
+  std::cout<<"Done! Starting Cuts\n"<<std::flush;
   unsigned count = 0;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -1224,7 +1470,7 @@ int main(int argc, char *argv[])
   flourCosts.clear();
   flourCostsBG.clear();
 
-  std::cout<<std::endl;
+  std::cout<<std::endl<<std::flush;
 
 #ifdef DEBUG_MEAN_PROJECTIONS
   std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
@@ -1236,11 +1482,23 @@ int main(int argc, char *argv[])
   std::vector< itk::SmartPointer< CostImageType > > avgImsVec = 
 	ComputeMeanImages( labelImage, medFiltImages, numThreads );
 
-  unsigned numCoeffs = ((ORDER+1)*(ORDER+2))/2-1;
-  std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
-			BGPolyCoeffs(numCoeffs,0);
+  try
+  {
+    for( itk::IndexValueType i=0; i<numSlices; ++i )
+    {
+      medFiltImages.at(i)->UnRegister();
+    }
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  medFiltImages.clear();
 
-{
+  std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
+			BGPolyCoeffs(numCoeffs,0), normConstants(2*3*numCoeffs,0);
+
   //Make pointers for the flour, autoflour n bg avg images
   CostImageType::Pointer flAvgIm, AFAvgIm, BGAvgIm;
   flAvgIm = avgImsVec.at(0); AFAvgIm = avgImsVec.at(1);
@@ -1258,23 +1516,13 @@ int main(int argc, char *argv[])
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
 
-  ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs );
+  ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
+			normConstants );
+
+  CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
+		flAvgIm, AFAvgIm, BGAvgIm );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
-}
-
-  try
-  {
-    for( itk::IndexValueType i=0; i<numSlices; ++i )
-    {
-      medFiltImages.at(i)->UnRegister();
-    }
-  }
-  catch(itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
 
   exit( EXIT_SUCCESS );
 }
