@@ -24,6 +24,7 @@
 #include <sstream>
 #include <iomanip>
 #include <float.h>
+#include <math.h>
 #include "new_graph.h"
 
 #ifdef _OPENMP
@@ -52,7 +53,7 @@
 #define WinSz 256	//Histogram computed on this window
 #define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
-#define NN 10.0		//The bottom NN percent are used to estimate the BG
+#define NN 5.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
 
 #define ORDER 4		//Order of the polynomial 2-4
@@ -106,6 +107,10 @@ template<typename InputImageType, typename OutputImageType>
   typename SumProjFilterType::Pointer sumProjFiltFlIm = SumProjFilterType::New();
   sumProjFiltFlIm->SetInput( inputImage );
   sumProjFiltFlIm->SetProjectionDimension( 2 );
+#ifdef _OPENMP
+itk::MultiThreader::SetGlobalDefaultNumberOfThreads
+		(itk::MultiThreader::GetGlobalMaximumNumberOfThreads());
+#endif
   try
   {
     sumProjFiltFlIm->Update();
@@ -115,6 +120,9 @@ template<typename InputImageType, typename OutputImageType>
     std::cerr << "Exception caught sum projection filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
+#ifdef _OPENMP
+itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
+#endif
   typename OutputImageType::Pointer outputImage = sumProjFiltFlIm->GetOutput();
   outputImage->Register();
   return outputImage;
@@ -197,7 +205,10 @@ template<typename InputImageType, typename OutputImageType>
   //Cast n Write Values
   itk::SizeValueType typeMax =
 		itk::NumericTraits<typename OutputImageType::PixelType>::max();
-  for( itk::SizeValueType i=0; i<inputImage.size(); ++i )
+#ifdef _OPENMP
+  #pragma omp parallel for
+#endif
+  for( itk::IndexValueType i=0; i<inputImage.size(); ++i )
   {
     //Start index
     start[2] = i; size[2] = 1; //Reset for writing out the slices
@@ -557,7 +568,6 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 
   itk::IndexValueType numSlices = InputImage->GetLargestPossibleRegion().GetSize()[2];
 #ifdef _OPENMP
-  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
   #pragma omp parallel for num_threads(numThreads)
 #endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
@@ -617,7 +627,6 @@ void ComputeCosts( int numThreads,
 #endif //DEBUG_RESCALING_N_COST_EST
 
 #ifdef _OPENMP
-  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
   #pragma omp parallel for num_threads(numThreads)
 #endif
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
@@ -904,7 +913,7 @@ std::vector< itk::SmartPointer< CostImageType > >
 	pixelVectForBG.at( indexValue2d ).at(k) = medFiltImIter.Get();
       else
 	pixelVectForBG.at( indexValue2d ).at(k) = 
-	  			itk::NumericTraits<US2ImageType::PixelType>::max();
+				std::numeric_limits<unsigned short>::max();
 
       if( labelImageIter.Get()==1 )
       {
@@ -946,11 +955,11 @@ std::vector< itk::SmartPointer< CostImageType > >
     if( flAvgCountIter.Get() )
       flAvgImIter.Set( flAvgImIter.Get()/flAvgCountIter.Get() );
     else
-      flAvgImIter.Set( std::numeric_limits<float>::max() );
+      flAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
     if( AFAvgCountIter.Get() )
       AFAvgImIter.Set( AFAvgImIter.Get()/AFAvgCountIter.Get() );
     else
-      AFAvgImIter.Set( std::numeric_limits<float>::max() );
+      AFAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
   }
 
   //Sort vectors to get the min of stacks at each pixel
@@ -962,26 +971,21 @@ std::vector< itk::SmartPointer< CostImageType > >
 #endif
 #endif
   for( itk::IndexValueType i=0; i<pixelVectForBG.size(); ++i )
-  {
     std::sort( pixelVectForBG.at(i).begin(), pixelVectForBG.at(i).end() );
-    std::cout<<pixelVectForBG.at(i).front()<<"\t";
-  }
 
   //Take the average of the bottom NN percent of the non-flour pixels
   itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
   CostIterType BGAvgImIter( BGAvgIm, BGAvgIm->GetLargestPossibleRegion() ); 
-  for( BGAvgImIter.GoToBegin(); BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
+  for( BGAvgImIter.GoToBegin(); !BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
   {
     itk::IndexValueType indexValue2d = BGAvgImIter.GetIndex()[0]*size[1] + 
 						BGAvgImIter.GetIndex()[1];
     std::vector<US2ImageType::PixelType>::iterator low;
     low = std::lower_bound( pixelVectForBG.at(indexValue2d).begin(),
 			    pixelVectForBG.at(indexValue2d).end(),
-			    itk::NumericTraits<US2ImageType::PixelType>::max() );
+			    std::numeric_limits<unsigned short>::max() );
     itk::IndexValueType validLength = low-pixelVectForBG.at(indexValue2d).begin();
-    if( validLength>NNPcIndex )
-      validLength = NNPcIndex;
-    if( !validLength ) BGAvgImIter.Set( std::numeric_limits<float>::max() );
+    if( !validLength ) BGAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
     else
     {
       double average = 0;
@@ -991,6 +995,7 @@ std::vector< itk::SmartPointer< CostImageType > >
       BGAvgImIter.Set( average );
     }
   }
+  std::cout<<"\n";
   std::vector< itk::SmartPointer< CostImageType > > returnVec;
   returnVec.push_back( flAvgIm ); flAvgIm->Register();
   returnVec.push_back( AFAvgIm ); AFAvgIm->Register();
@@ -1010,7 +1015,9 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 #endif
 		, DblVec &outCoeffs )
 {
-//  NormalizeAllNStoreNormConsts( X, Y, .... );
+//Take log of ImVals and at the same time ignore vals and indices where they are 
+//equal to std::numeric_limits<unsigned short>::max()
+// DiscardInvlidValsNTakeLogNNormalizeAllNStoreNormConsts( X, Y, .... );
   return;
 }
 
@@ -1081,14 +1088,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 }
 
 typedef struct
-{  double X, Y, X2, Y2, XY, FlVals, AFVals, BGVals
-#if ORDER>2
-	, X3, X2Y, XY2, Y3
-#endif
-#if ORDER>3
-	, X4, X3Y, X2Y2, XY3, Y4
-#endif
-	;
+{  double X, Y, FlVals, AFVals, BGVals;
 } IndexStructType;
 
 void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
@@ -1100,10 +1100,6 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
   US3ImageType::SizeType size;
   size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
   size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
-  size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
-
-  //Generate image indices
-  IndexVector.resize( size[0]*size[1] );
 
   US3ImageType::IndexType start3d;
   US3ImageType::SizeType  size3d;
@@ -1118,151 +1114,136 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
     IndexStructType currentIndex; //Check order in the estimation code
     currentIndex.X = index[1];
     currentIndex.Y = index[0];
-    currentIndex.X2 = currentIndex.X*currentIndex.X;
-    currentIndex.Y2 = currentIndex.Y*currentIndex.Y;
-    currentIndex.XY = currentIndex.X*currentIndex.Y;
+    double X2 = currentIndex.X*currentIndex.X;
+    double Y2 = currentIndex.Y*currentIndex.Y;
+    double XY = currentIndex.X*currentIndex.Y;
 #if ORDER>2
-    currentIndex.X3  = currentIndex.X2*currentIndex.X;
-    currentIndex.X2Y = currentIndex.X2*currentIndex.Y;
-    currentIndex.XY2 = currentIndex.X*currentIndex.Y2;
-    currentIndex.Y3  = currentIndex.Y*currentIndex.Y2;
+    double X3  = X2*currentIndex.X;
+    double X2Y = X2*currentIndex.Y;
+    double XY2 = currentIndex.X*Y2;
+    double Y3  = currentIndex.Y*Y2;
 #endif
 #if ORDER>3
-    currentIndex.X4   = currentIndex.X2*currentIndex.X2;
-    currentIndex.X3Y  = currentIndex.X3*currentIndex.Y;
-    currentIndex.X2Y2 = currentIndex.X2*currentIndex.Y2;
-    currentIndex.XY3  = currentIndex.X *currentIndex.Y3;
-    currentIndex.Y4   = currentIndex.Y2*currentIndex.Y2;
+    double X4   = X2*X2;
+    double X3Y  = X3*currentIndex.Y;
+    double X2Y2 = X2*Y2;
+    double XY3  = currentIndex.X*Y3;
+    double Y4   = Y2*Y2;
 #endif
-currentIndex.FlVals = flPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(0))
+    currentIndex.FlVals = flPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(0))
 			/normConstants.at(numCoeffs)
 +flPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1)
-+flPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2))/normConstants.at(numCoeffs+2)
-+flPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(3))/normConstants.at(numCoeffs+3)
-+flPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(4))/normConstants.at(numCoeffs+4)
++flPolyCoeffs.at(2)*(X2-normConstants.at(2))/normConstants.at(numCoeffs+2)
++flPolyCoeffs.at(3)*(Y2-normConstants.at(3))/normConstants.at(numCoeffs+3)
++flPolyCoeffs.at(4)*(XY-normConstants.at(4))/normConstants.at(numCoeffs+4)
 #if ORDER>2
-+flPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(5))/normConstants.at(numCoeffs+5)
-+flPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6)
-+flPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(7))/normConstants.at(numCoeffs+7)
-+flPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8)
++flPolyCoeffs.at(5)*(X3 -normConstants.at(5))/normConstants.at(numCoeffs+5)
++flPolyCoeffs.at(6)*(X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6)
++flPolyCoeffs.at(7)*(XY2-normConstants.at(7))/normConstants.at(numCoeffs+7)
++flPolyCoeffs.at(8)*(Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8)
 #endif
 #if ORDER>3
-+flPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(9))/normConstants.at(numCoeffs+9)
-+flPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10)
-+flPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11)
-+flPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12)
-+flPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13)
++flPolyCoeffs.at(9) *(X4  -normConstants.at(9))/normConstants.at(numCoeffs+9)
++flPolyCoeffs.at(10)*(X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10)
++flPolyCoeffs.at(11)*(X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11)
++flPolyCoeffs.at(12)*(XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12)
++flPolyCoeffs.at(13)*(Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13)
 #endif
-;
-currentIndex.AFVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
+	;
+    currentIndex.AFVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
 			/normConstants.at(3*numCoeffs)
 +AFPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1)
-+AFPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
-+AFPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
-+AFPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
++AFPolyCoeffs.at(2)*(X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
++AFPolyCoeffs.at(3)*(Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
++AFPolyCoeffs.at(4)*(XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
 #if ORDER>2
-+AFPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
-+AFPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
-+AFPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
-+AFPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
++AFPolyCoeffs.at(5)*(X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
++AFPolyCoeffs.at(6)*(X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
++AFPolyCoeffs.at(7)*(XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
++AFPolyCoeffs.at(8)*(Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
 #endif
 #if ORDER>3
-+AFPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(2*numCoeffs+9))
-		/normConstants.at(3*numCoeffs+9)
-+AFPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(2*numCoeffs+10))
-		/normConstants.at(3*numCoeffs+10)
-+AFPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(2*numCoeffs+11))
-		/normConstants.at(3*numCoeffs+11)
-+AFPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(2*numCoeffs+12))
-		/normConstants.at(3*numCoeffs+12)
-+AFPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(2*numCoeffs+13))
-		/normConstants.at(3*numCoeffs+13)
++AFPolyCoeffs.at(9) *(X4  -normConstants.at(2*numCoeffs+9))/normConstants.at(3*numCoeffs+9)
++AFPolyCoeffs.at(10)*(X3Y -normConstants.at(2*numCoeffs+10))/normConstants.at(3*numCoeffs+10)
++AFPolyCoeffs.at(11)*(X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11)
++AFPolyCoeffs.at(12)*(XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12)
++AFPolyCoeffs.at(13)*(Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13)
 #endif
-    ;
-currentIndex.BGVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
-			/normConstants.at(3*numCoeffs)
-+AFPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1)
-+AFPolyCoeffs.at(2)*(currentIndex.X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
-+AFPolyCoeffs.at(3)*(currentIndex.Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
-+AFPolyCoeffs.at(4)*(currentIndex.XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
+	;
+currentIndex.BGVals = BGPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(4*numCoeffs))
+			/normConstants.at(5*numCoeffs)
++BGPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(4*numCoeffs+1))/normConstants.at(5*numCoeffs+1)
++BGPolyCoeffs.at(2)*(X2-normConstants.at(4*numCoeffs+2))/normConstants.at(5*numCoeffs+2)
++BGPolyCoeffs.at(3)*(Y2-normConstants.at(4*numCoeffs+3))/normConstants.at(5*numCoeffs+3)
++BGPolyCoeffs.at(4)*(XY-normConstants.at(4*numCoeffs+4))/normConstants.at(5*numCoeffs+4)
 #if ORDER>2
-+AFPolyCoeffs.at(5)*(currentIndex.X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
-+AFPolyCoeffs.at(6)*(currentIndex.X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
-+AFPolyCoeffs.at(7)*(currentIndex.XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
-+AFPolyCoeffs.at(8)*(currentIndex.Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
++BGPolyCoeffs.at(5)*(X3 -normConstants.at(4*numCoeffs+5))/normConstants.at(5*numCoeffs+5)
++BGPolyCoeffs.at(6)*(X2Y-normConstants.at(4*numCoeffs+6))/normConstants.at(5*numCoeffs+6)
++BGPolyCoeffs.at(7)*(XY2-normConstants.at(4*numCoeffs+7))/normConstants.at(5*numCoeffs+7)
++BGPolyCoeffs.at(8)*(Y3 -normConstants.at(4*numCoeffs+8))/normConstants.at(5*numCoeffs+8)
 #endif
 #if ORDER>3
-+AFPolyCoeffs.at(9)*(currentIndex.X4   -normConstants.at(2*numCoeffs+9))
-		/normConstants.at(3*numCoeffs+9)
-+AFPolyCoeffs.at(10)*(currentIndex.X3Y -normConstants.at(2*numCoeffs+10))
-		/normConstants.at(3*numCoeffs+10)
-+AFPolyCoeffs.at(11)*(currentIndex.X2Y2-normConstants.at(2*numCoeffs+11))
-		/normConstants.at(3*numCoeffs+11)
-+AFPolyCoeffs.at(12)*(currentIndex.XY3 -normConstants.at(2*numCoeffs+12))
-		/normConstants.at(3*numCoeffs+12)
-+AFPolyCoeffs.at(13)*(currentIndex.Y4  -normConstants.at(2*numCoeffs+13))
-		/normConstants.at(3*numCoeffs+13)
++BGPolyCoeffs.at(9) *(X4   -normConstants.at(4*numCoeffs+9))/normConstants.at(5*numCoeffs+9)
++BGPolyCoeffs.at(10)*(X3Y -normConstants.at(4*numCoeffs+10))/normConstants.at(5*numCoeffs+10)
++BGPolyCoeffs.at(11)*(X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11)
++BGPolyCoeffs.at(12)*(XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12)
++BGPolyCoeffs.at(13)*(Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13)
 #endif
     ;
+    currentIndex.FlVals = (currentIndex.AFVals+currentIndex.FlVals)/2;//Fl surface can be skewed by noise
+    IndexVector.push_back( currentIndex );
   }
   return;
 }
 
 bool flMax( const IndexStructType &a, const IndexStructType &b)
 { return a.FlVals > b.FlVals; }
-bool flMin( const IndexStructType &a, const IndexStructType &b)
-{ return a.FlVals < b.FlVals; }
 bool AFMax( const IndexStructType &a, const IndexStructType &b)
 { return a.AFVals > b.AFVals; }
-bool AFMin( const IndexStructType &a, const IndexStructType &b)
-{ return a.AFVals < b.AFVals; }
 bool BGMax( const IndexStructType &a, const IndexStructType &b)
 { return a.BGVals > b.BGVals; }
-bool BGMin( const IndexStructType &a, const IndexStructType &b)
-{ return a.BGVals < b.BGVals; }
+bool IndMin( const IndexStructType &a, const IndexStructType &b)
+{ if( a.Y==b.Y ) return a.X < b.X; else return a.Y < b.Y; }
 
 double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
-	CostImageType::Pointer flAvgIm, unsigned channel, bool minMax )
+	CostImageType::Pointer currentAvgIm, unsigned channel, bool flagMinMax )
 {
+  typedef itk::ImageRegionIterator< CostImageType > CostIterType;
   double returnValue=0;
   if( channel==0 )
-    if( minMax )
+    if( flagMinMax )
       std::sort( IndexVector.begin(), IndexVector.end(), flMax );
   else if( channel==1 )
-    if( minMax )
+    if( flagMinMax )
       std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
   else
-    if( minMax )
+    if( flagMinMax )
       std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
-  itk::SizeValueType first = 0;
-  if( minMax )
-    for( itk::SizeValueType i=0; i<IndexVector.size(); ++i )
+  CostIterType costIter( currentAvgIm, currentAvgIm->GetLargestPossibleRegion() );
+  itk::SizeValueType count=MinMax;
+  if( flagMinMax )
+    for( itk::SizeValueType i = 0; i<MinMax; ++i )
     {
-      if( channel==0 )
-	if( IndexVector.at(i).FlVals < std::numeric_limits<float>::max() )
-	  break;
-      if( channel==1 )
-	if( IndexVector.at(i).AFVals < std::numeric_limits<float>::max() )
-	  break;
-      if( channel==2 )
-	if( IndexVector.at(i).BGVals < std::numeric_limits<float>::max() )
-	  break;
-    }
-  if( minMax )
-    for( itk::SizeValueType i = first; i<(first+MinMax); ++i )
-    {
-      if( channel==0 ) returnValue += IndexVector.at(i).FlVals;
-      if( channel==1 ) returnValue += IndexVector.at(i).AFVals;
-      if( channel==2 ) returnValue += IndexVector.at(i).BGVals;
+      CostImageType::IndexType index;
+      index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
+      costIter.SetIndex( index );
+      if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
+	returnValue += log(costIter.Get());
+      else
+        --count;
     }
   else
     for( itk::SizeValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
     {
-      if( channel==0 ) returnValue += IndexVector.at(i).FlVals;
-      if( channel==1 ) returnValue += IndexVector.at(i).AFVals;
-      if( channel==2 ) returnValue += IndexVector.at(i).BGVals;
+      CostImageType::IndexType index;
+      index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
+      costIter.SetIndex( index );
+      if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
+	returnValue += log(costIter.Get());
+      else
+        --count;
     }
-  returnValue /= ((double)MinMax);
+  returnValue /= ((double)count);
   return returnValue;
 }
 
@@ -1270,23 +1251,98 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
-	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm )
+	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm, int numThreads )
 {
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > InputIterType;
+  typedef itk::ImageRegionIteratorWithIndex< UC3ImageType  > LabelIterType;
   US3ImageType::SizeType size;
   size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
   size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
   size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
+  itk::SizeValueType numSlices = size[2];
   std::vector< IndexStructType > IndexVector;
   GetSurfaceForIndices( inputImage, IndexVector, normConstants, flPolyCoeffs, AFPolyCoeffs,
   			BGPolyCoeffs );
-  double flMax = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 1 );
-  double flMin = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 0 );
-  double AFMax = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 1 );
-  double AFMin = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
-  double BGMax = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 );
-  double BGMin = BGMax-(AFMax-AFMin);
+  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 1 );
+  double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 0 );
+  double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 1 );
+  double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
+  //double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 ); Using the same rage as AF
+  //double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 2, 0 ); Since BG is kinda noisy
+  double BGMaxImage = AFMaxImage;
+  double BGMinImage = AFMinImage;
 
+  std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
+
+  //Rescale to between 0 and max-min for all three surfaces
+  double flMinSurface, flMaxSurface, AFMaxSurface, AFMinSurface, BGMaxSurface, BGMinSurface;
+  flMinSurface = AFMinSurface = BGMinSurface = std::numeric_limits<unsigned short>::max();
+  flMaxSurface = AFMaxSurface = BGMaxSurface = 0;
+  for( itk::IndexValueType i=0; i<IndexVector.size(); ++i )
+  {
+    if( flMinSurface>IndexVector.at(i).FlVals ) flMinSurface=IndexVector.at(i).FlVals;
+    if( flMaxSurface<IndexVector.at(i).FlVals ) flMaxSurface=IndexVector.at(i).FlVals;
+    if( AFMinSurface>IndexVector.at(i).AFVals ) AFMinSurface=IndexVector.at(i).AFVals;
+    if( AFMaxSurface<IndexVector.at(i).AFVals ) AFMaxSurface=IndexVector.at(i).AFVals;
+    if( BGMinSurface>IndexVector.at(i).BGVals ) BGMinSurface=IndexVector.at(i).BGVals;
+    if( BGMaxSurface<IndexVector.at(i).BGVals ) BGMaxSurface=IndexVector.at(i).BGVals;
+  }
+  double flRatio = (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface);
+  double AFRatio = (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface);
+  double BGRatio = (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface);
+  CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
+  CostImageType::Pointer flSurf = CostImageType::New();
+  CostImageType::Pointer AFSurf = CostImageType::New();
+  CostImageType::Pointer BGSurf = CostImageType::New();
+  CreateDefaultCoordsNAllocateSpace<CostImageType>( flSurf, size2d );
+  CreateDefaultCoordsNAllocateSpace<CostImageType>( AFSurf, size2d );
+  CreateDefaultCoordsNAllocateSpace<CostImageType>( BGSurf, size2d );
+  CostIterType flIter( flSurf, flSurf->GetLargestPossibleRegion() );
+  CostIterType AFIter( AFSurf, AFSurf->GetLargestPossibleRegion() );
+  CostIterType BGIter( BGSurf, BGSurf->GetLargestPossibleRegion() );
+  for( itk::IndexValueType i=0; i<IndexVector.size(); ++i )
+  {
+    CostImageType::IndexType index; index[0] = IndexVector.at(i).Y; index[1] = IndexVector.at(i).X;
+    flIter.SetIndex( index ); AFIter.SetIndex( index ); BGIter.SetIndex( index );
+    flIter.Set( (IndexVector.at(i).FlVals-flMinSurface)*flRatio );
+    AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface)*AFRatio );
+    BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface)*BGRatio );
+  }
+
+  size[2] = 1; //Process one slice at a time
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+#else
+  #pragma omp parallel for
+#endif
+#endif
+  for( itk::IndexValueType k=0; k<numSlices; ++k )
+  {
+    US3ImageType::IndexType index; index[0]=0; index[1]=0; index[2]=k;
+    US3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( index );
+    InputIterType inputIter( inputImage, region );
+    LabelIterType labelIter( labelImage, region );
+    CostIterType flIterPerThr( flSurf, flSurf->GetLargestPossibleRegion() );
+    CostIterType AFIterPerThr( AFSurf, AFSurf->GetLargestPossibleRegion() );
+    CostIterType BGIterPerThr( BGSurf, BGSurf->GetLargestPossibleRegion() );
+    inputIter.GoToBegin(); labelIter.GoToBegin();
+    flIterPerThr.GoToBegin(); AFIterPerThr.GoToBegin(); BGIterPerThr.GoToBegin();
+    for( ; !flIterPerThr.IsAtEnd(); ++inputIter, ++labelIter,
+    				++flIterPerThr, ++AFIterPerThr, ++BGIterPerThr )
+    {
+      double curPix = log(inputIter.Get());
+      double minusVal = 0;
+      if( !labelIter.Get() ) minusVal = BGIterPerThr.Get();
+      else if( labelIter.Get()==1 ) minusVal = AFIterPerThr.Get();
+      else minusVal = flIterPerThr.Get();
+      curPix -= minusVal;
+      curPix = std::floor(exp(curPix)+0.5);
+      curPix = curPix<0? 0:curPix;
+      inputIter.Set( (US3ImageType::PixelType)curPix );
+    }
+  }
   return;
 }
 
@@ -1351,7 +1407,8 @@ int main(int argc, char *argv[])
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
-  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads) \
+	shared(inputImage, medFiltImages, autoFlourCosts, flourCosts, autoFlourCostsBG, flourCostsBG)
 #else
   #pragma omp parallel for
 #endif
@@ -1443,9 +1500,9 @@ int main(int argc, char *argv[])
   std::cout<<"Done! Starting Cuts\n"<<std::flush;
   unsigned count = 0;
 #ifdef _OPENMP
-  itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
-  #pragma omp parallel for schedule(dynamic,1) num_threads(reducedThreads9)
+  #pragma omp parallel for schedule(dynamic,1) num_threads(reducedThreads9) \
+	shared( medFiltImages, autoFlourCosts, autoFlourCostsBG, labelImage )
 #else
   #pragma omp parallel for num_threads(reducedThreads9)
 #endif
@@ -1505,7 +1562,6 @@ int main(int argc, char *argv[])
   BGAvgIm = avgImsVec.at(2);
 
 #ifdef DEBUG_MEAN_PROJECTIONS
-  std::cout<<flAvgIm<<AFAvgIm<<BGAvgIm<<std::flush;
   std::string flAvgName = nameTemplate + "flAvg.tif";
   std::string AFAvgName = nameTemplate + "AFAvg.tif";
   std::string BGAvgName = nameTemplate + "BGAvg.tif";
@@ -1520,9 +1576,12 @@ int main(int argc, char *argv[])
 			normConstants );
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
-		flAvgIm, AFAvgIm, BGAvgIm );
+		flAvgIm, AFAvgIm, BGAvgIm, numThreads );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
+
+  std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
+  WriteITKImage<US3ImageType>( inputImage, correctedImageName );
 
   exit( EXIT_SUCCESS );
 }
