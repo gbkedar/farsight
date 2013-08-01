@@ -685,7 +685,8 @@ void ComputeCosts( int numThreads,
 	typedef itk::ImageRegionIterator< US2ImageType > IterType;
 	IterType rescaleIter ( resacledImages.at(k), region );
 	rescaleIter.GoToBegin();
-//	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )#endif //DEBUG_RESCALING_N_COST_EST
+//	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )
+#endif //DEBUG_RESCALING_N_COST_EST
 
 	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterFlourBG,
 #ifdef DEBUG_RESCALING_N_COST_EST
@@ -1017,6 +1018,79 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 {
 //Take log of ImVals and at the same time ignore vals and indices where they are 
 //equal to std::numeric_limits<unsigned short>::max()
+  itk::SizeValueType countFail=0;
+  //Compute valid indices and means & 2-norms
+  double XMean=0, YMean=0, X2Mean=0, Y2Mean=0, XYMean=0, ImValsMean=0,
+	XNorm=0, YNorm=0, X2Norm=0, Y2Norm=0, XYNorm=0, ImValsNorm=0
+#if ORDER>2
+	, X3Mean=0, X2YMean=0, XY2Mean=0, Y3Mean=0
+	, X3Norm=0, X2YNorm=0, XY2Norm=0, Y3Norm=0
+#endif
+#if ORDER>3
+	, X4Mean=0, X3YMean=0, X2Y2Mean=0, XY3Mean=0, Y4Mean=0
+	, X4Norm=0, X3YNorm=0, X2Y2Norm=0, XY3Norm=0, Y4Norm=0
+#endif
+	;
+  for( itk::SizeValueType i=0; i<ImVals.size(); ++i )
+  {
+    if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
+    {
+	XMean+=X.at(i); YMean+=Y.at(i); X2Mean+=X2.at(i); Y2Mean+=Y2.at(i); XYMean+=XY.at(i);
+	ImValsMean+=ImVals.at(i);
+#if ORDER>2
+	X3Mean+=X3.at(i); X2YMean+=X2Y.at(i); XY2Mean+=XY2.at(i); Y3Mean+=Y3.at(i);
+#endif
+#if ORDER>3
+	X4Mean+=X4.at(i); X3YMean+=X3Y.at(i); X2Y2Mean+=X2Y2.at(i); XY3Mean+=XY3.at(i);	Y4Mean+=Y4.at(i);
+#endif
+    }
+    else
+      ++countFail;
+  }
+  for( itk::SizeValueType i=0; i<ImVals.size(); ++i )
+  {
+
+    if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
+    {
+	X.at(i)-=XMean; Y.at(i)-=YMean; X2.at(i)-=X2Mean; Y2.at(i)-=Y2Mean; XY.at(i)-=XYMean;
+	ImVals.at(i)-=ImValsMean;
+	XNorm+=(X.at(i)*X.at(i)); YNorm+=(Y.at(i)*Y.at(i)); X2Norm+=(X2.at(i)*X2.at(i));
+	Y2Norm+=(Y2.at(i)*Y2.at(i)); XYNorm+=(X.at(i)*Y.at(i));
+	ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
+#if ORDER>2
+	X3.at(i)-=X3Mean; X2Y.at(i)-=X2YMean; XY2.at(i)-=XY2Mean; Y3.at(i)-=Y3Mean;
+	X3Norm+=(X3.at(i)*X3.at(i)); X2YNorm+=(X2Y.at(i)*X2Y.at(i)); XY2Norm+=(XY2.at(i)*XY2.at(i));
+	Y3Norm+=(Y3.at(i)*Y3.at(i));
+#if ORDER>3
+	X4.at(i)-=X4Mean; X3Y.at(i)-=X3YMean; X2Y2.at(i)-=X2Y2Mean; XY3.at(i)-=XY3Mean;	Y4.at(i)-=Y4Mean;
+	X4Norm+=(X4.at(i)*X4.at(i)); X3YNorm+=(X3Y.at(i)*X3Y.at(i)); X2Y2Norm+=(X2Y2.at(i)*X2Y2.at(i));
+	XY3Norm+=(XY3.at(i)*XY3.at(i)); Y4Norm+=(Y4.at(i)*Y4.at(i));
+#endif
+    }
+  }
+  //Store the normalization constants
+  normConstants.at(normIndex)=XMean; normConstants.at(normIndex+1)=YMean;
+  normConstants.at(normIndex+2)=X2Mean; normConstants.at(normIndex+3)=Y2Mean;
+  normConstants.at(normIndex+4)=XYMean;
+  normConstants.at(normIndex+numCoeffs)=XNorm; normConstants.at(normIndex+numCoeffs+1)=YNorm;
+  normConstants.at(normIndex+numCoeffs+2)=X2Norm; normConstants.at(normIndex+numCoeffs+3)=Y2Norm;
+  normConstants.at(normIndex+numCoeffs+4)=XYNorm;
+#if ORDER>2
+  normConstants.at(normIndex+5)=X3Mean; normConstants.at(normIndex+6)=X2YMean;
+  normConstants.at(normIndex+7)=XY2Mean; normConstants.at(normIndex+8)=Y3Mean;
+  normConstants.at(normIndex+numCoeffs+5)=X3Norm; normConstants.at(normIndex+numCoeffs+6)=X2YNorm;
+  normConstants.at(normIndex+numCoeffs+7)=XY2Norm; normConstants.at(normIndex+numCoeffs+8)=Y3Norm;
+#endif
+#if ORDER>3
+  normConstants.at(normIndex+9)=X4Mean; normConstants.at(normIndex+10)=X3YMean;
+  normConstants.at(normIndex+11)=X2Y2Mean; normConstants.at(normIndex+12)=XY3Mean;
+  normConstants.at(normIndex+13)=Y4Mean;
+  normConstants.at(normIndex+numCoeffs+9)=X4Norm; normConstants.at(normIndex+numCoeffs+10)=X3YNorm;
+  normConstants.at(normIndex+numCoeffs+11)=X2Y2Norm; normConstants.at(normIndex+numCoeffs+12)=XY3Norm;
+  normConstants.at(normIndex+numCoeffs+13)=Y4Norm;
+#endif
+  
+
 // DiscardInvlidValsNTakeLogNNormalizeAllNStoreNormConsts( X, Y, .... );
   return;
 }
