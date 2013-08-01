@@ -996,7 +996,6 @@ std::vector< itk::SmartPointer< CostImageType > >
       BGAvgImIter.Set( average );
     }
   }
-  std::cout<<"\n";
   std::vector< itk::SmartPointer< CostImageType > > returnVec;
   returnVec.push_back( flAvgIm ); flAvgIm->Register();
   returnVec.push_back( AFAvgIm ); AFAvgIm->Register();
@@ -1047,9 +1046,13 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
     else
       ++countFail;
   }
+  double countIndex = ImVals.size()-countFail;
+  XMean/=countIndex; YMean/=countIndex;
+  X2Mean/=countIndex; Y2Mean/=countIndex; XYMean/=countIndex; ImValsMean/=countIndex;
+  X3Mean/=countIndex; X2YMean/=countIndex; XY2Mean/=countIndex; Y3Mean/=countIndex;
+  X4Mean/=countIndex; X3YMean/=countIndex; X2Y2Mean/=countIndex; XY3Mean/=countIndex; Y4Mean/=countIndex;
   for( itk::SizeValueType i=0; i<ImVals.size(); ++i )
   {
-
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
 	X.at(i)-=XMean; Y.at(i)-=YMean; X2.at(i)-=X2Mean; Y2.at(i)-=Y2Mean; XY.at(i)-=XYMean;
@@ -1061,6 +1064,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 	X3.at(i)-=X3Mean; X2Y.at(i)-=X2YMean; XY2.at(i)-=XY2Mean; Y3.at(i)-=Y3Mean;
 	X3Norm+=(X3.at(i)*X3.at(i)); X2YNorm+=(X2Y.at(i)*X2Y.at(i)); XY2Norm+=(XY2.at(i)*XY2.at(i));
 	Y3Norm+=(Y3.at(i)*Y3.at(i));
+#endif
 #if ORDER>3
 	X4.at(i)-=X4Mean; X3Y.at(i)-=X3YMean; X2Y2.at(i)-=X2Y2Mean; XY3.at(i)-=XY3Mean;	Y4.at(i)-=Y4Mean;
 	X4Norm+=(X4.at(i)*X4.at(i)); X3YNorm+=(X3Y.at(i)*X3Y.at(i)); X2Y2Norm+=(X2Y2.at(i)*X2Y2.at(i));
@@ -1089,9 +1093,51 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   normConstants.at(normIndex+numCoeffs+11)=X2Y2Norm; normConstants.at(normIndex+numCoeffs+12)=XY3Norm;
   normConstants.at(normIndex+numCoeffs+13)=Y4Norm;
 #endif
-  
-
-// DiscardInvlidValsNTakeLogNNormalizeAllNStoreNormConsts( X, Y, .... );
+  XNorm=sqrt(XNorm); YNorm=sqrt(YNorm); X2Norm=sqrt(X2Norm); Y2Norm=sqrt(Y2Norm); XYNorm=sqrt(XYNorm);
+  ImValsNorm=sqrt(ImValsNorm);
+#if ORDER>2
+  X3Norm=sqrt(X3Norm); X2YNorm=sqrt(X2YNorm); XY2Norm=sqrt(XY2Norm); Y3Norm=sqrt(Y3Norm);
+#endif
+#if ORDER>3
+  X4Norm=sqrt(X4Norm); X3YNorm=sqrt(X3YNorm); X2Y2Norm=sqrt(X2Y2Norm); XY3Norm=sqrt(XY3Norm);
+  Y4Norm=sqrt(Y4Norm);
+#endif
+  std::cout<<"Setting up LARS\n"<<std::flush;
+  arma::mat matX( ImVals.size()-countFail, numCoeffs );
+  arma::mat matY( ImVals.size()-countFail, 1 );
+  std::cout<<"Starting LARS X has "<<matX.n_rows<<" rows, "<<matX.n_cols
+	<<" cols, Y has "<<matY.n_elem<<" elements\n"<< std::flush;
+  for( itk::SizeValueType i=0,j=0; i<ImVals.size(); ++i )
+  {
+    if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
+    {
+	std::cout<<"1st order\n"<<std::flush;
+	X.at(i)/=XNorm; Y.at(i)/=YNorm; X2.at(i)/=X2Norm; Y2.at(i)/=Y2Norm; XY.at(i)/=XYNorm;
+	matX(0,j)=X.at(i); matX(1,j)=Y.at(i); matX(2,j)=X2.at(i); matX(3,j)=Y2.at(i); matX(4,j)=XY.at(i);
+	ImVals.at(i)/=ImValsNorm;
+	matY(j,0)=ImVals.at(i);
+#if ORDER>2
+	std::cout<<"2nd order\n"<<std::flush;
+	X3.at(i)/=X3Norm; X2Y.at(i)/=X2YNorm; XY2.at(i)/=XY2Norm; Y3.at(i)/=Y3Norm;
+	matX(5,j)=X3.at(i); matX(6,j)=X2Y.at(i); matX(7,j)=XY2.at(i); matX(8,j)=Y3.at(i);
+#endif
+#if ORDER>3
+	std::cout<<"3rd order\n"<<std::flush;
+	X4.at(i)/=X4Norm; X3Y.at(i)/=X3YNorm; X2Y2.at(i)/=X2Y2Norm; XY3.at(i)/=XY3Norm;	Y4.at(i)/=Y4Norm;
+	matX(9,j)=X4.at(i); matX(10,j)=X3Y.at(i); matX(11,j)=X2Y2.at(i); matX(12,j)=XY3.at(i);
+	matX(13,j)=Y4.at(i);
+#endif
+	++j;
+    }
+    std::cout<<"i="<<i<<", j="<<j<<std::endl;
+  }
+  double lambda1=0.1, lambda2=0.1;
+  bool useCholesky = true;
+  mlpack::regression::LARS lars(useCholesky, lambda1, lambda2);
+  arma::vec beta;
+  lars.Regress(matX, matY.unsafe_col(0), beta, false /* do not transpose */);
+  std::cout<<beta<<std::endl;
+  std::cout<<"LARS done\n"<<std::flush;
   return;
 }
 
@@ -1423,6 +1469,16 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 int main(int argc, char *argv[])
 {
 
+  arma::mat matX( 3, 2 );
+  arma::mat matY( 3, 1 );
+  std::cout<<"Starting LARS X has "<<matX.n_rows<<" rows, "<<matX.n_cols
+	<<" cols, Y has "<<matY.n_elem<<" elements\n"<< std::flush;
+  for( itk::SizeValueType i=0; i<3; ++i )
+  {
+    matX(i,0)=i; matX(i,1)=i+2;
+    matY(i,0)=(i+1)*10;
+  }
+  std::cout<<matX<<matY;
 
   if( argc < 2 )
   {
@@ -1650,13 +1706,18 @@ int main(int argc, char *argv[])
 
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
 			normConstants );
+  std::cout<<"Polynomials estimated\n"<<std::flush;
+  for( itk::SizeValueType i=0; i<numCoeffs; ++i )
+    std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
 		flAvgIm, AFAvgIm, BGAvgIm, numThreads );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
-
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
+
+  std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
+
   WriteITKImage<US3ImageType>( inputImage, correctedImageName );
 
   exit( EXIT_SUCCESS );
