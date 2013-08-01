@@ -13,6 +13,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
+
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
 #define DEBUG_MEAN_PROJECTIONS
@@ -37,7 +38,6 @@
 #include "itkIntTypes.h"
 #include "itkNumericTraits.h"
 #include "itkExtractImageFilter.h"
-#include "itkMinErrorThresholdImageCalculator.h"
 #include "itkMinimumProjectionImageFilter.h"
 #include "itkCastImageFilter.h"
 #include "itkMaximumProjectionImageFilter.h"
@@ -49,6 +49,9 @@
 #include "itkScalarImageToHistogramGenerator.h"
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
+
+#include <mlpack/core.hpp>
+#include <mlpack/methods/lars/lars.hpp>
 
 #define WinSz 256	//Histogram computed on this window
 #define CWin  32	//This is half the inner window
@@ -515,7 +518,6 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 {
   typedef itk::MaximumProjectionImageFilter< US3ImageType, US2ImageType > MaxProjFilterType;
   typedef itk::MinimumProjectionImageFilter< US3ImageType, US2ImageType > MinProjFilterType;
-  typedef itk::MinErrorThresholdImageCalculator< US2ImageType > MinErrorThresCalcType;
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   typedef itk::ImageRegionIterator< US3ImageType > IterTypeUS3d;
 
@@ -674,19 +676,16 @@ void ComputeCosts( int numThreads,
 	constIter.GoToBegin(); costIterFlour.GoToBegin(); costIterFlourBG.GoToBegin();
 	costIterAutoFlour.GoToBegin(); costIterAutoFlourBG.GoToBegin();
 #ifdef DEBUG_RESCALING_N_COST_EST
-	/****
-	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
-	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
-	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
-	US2ImageType::RegionType region;
-	ConstIterType constIter ( medFiltImages.at(k), region );
-	constIter.GoToBegin();
-	****/
+//	US2ImageType::SizeType size; size[0] = CWin; size[1] = CWin;
+//	if( (i+CWin)>=numRow ) size[0] = numRow-i-1;
+//	if( (j+CWin)>=numCol ) size[1] = numCol-j-1;
+//	US2ImageType::RegionType region;
+//	ConstIterType constIter ( medFiltImages.at(k), region );
+//	constIter.GoToBegin();
 	typedef itk::ImageRegionIterator< US2ImageType > IterType;
 	IterType rescaleIter ( resacledImages.at(k), region );
 	rescaleIter.GoToBegin();
-/****	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )****/
-#endif //DEBUG_RESCALING_N_COST_EST
+//	for( ; !rescaleIter.IsAtEnd(); ++rescaleIter )#endif //DEBUG_RESCALING_N_COST_EST
 
 	for( ; !constIter.IsAtEnd(); ++constIter, ++costIterFlour, ++costIterFlourBG,
 #ifdef DEBUG_RESCALING_N_COST_EST
@@ -766,8 +765,9 @@ void ComputeCut( itk::IndexValueType slice,
   itk::SizeValueType numRow   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[0];
   itk::SizeValueType numCol   = medFiltImages.at(0)->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numNodes = numCol*numRow;
-  itk::SizeValueType numEdges = 3*numCol*numRow /*Down, right and diagonal*/ + 1
-  				- 2*numCol/*No Down At Bottom*/ - 2*numRow/*No Right At Edge*/;
+  itk::SizeValueType numEdges = 3*numCol*numRow //Down, right and diagonal
+  				+ 1 - 2*numCol	//No Down At Bottom
+				- 2*numRow;	//No Right At Edge
 
   typedef Graph_B < double, double, double > GraphType;
   GraphType *graph = new GraphType( numNodes, numEdges );
@@ -1348,6 +1348,8 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 
 int main(int argc, char *argv[])
 {
+
+
   if( argc < 2 )
   {
     usage(argv[0]);

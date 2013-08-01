@@ -63,7 +63,7 @@ limitations under the License.
 #include "itkImageDuplicator.h"
 #include "itkThresholdImageFilter.h"
 
-#include "GraphCuts/itkMinErrorThresholdImageFilter.h"
+#include "itkMinErrorThresholdImageFilter.h"
 #include "GraphCuts/new_graph.h"
 
 namespace ftk

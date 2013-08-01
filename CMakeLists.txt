@@ -58,6 +58,7 @@ option( BUILD_FTKNUCLEARSEGMENTATIONNIC "Build Nicolas Segmentation" OFF)
 option( BUILD_Batch_Distance2Device "Build Distance to Device Batch Processing Code" OFF)
 option( BUILD_PIPELINE "Build program to dice an image based on a text file centered around a coordinate" OFF)
 option( BUILD_CURVELETS "Build the curvelts based preprocessing executables" OFF)
+option( BUILD_ILLUMINATION "Build the 2D illumination correction and registration libraries" OFF)
 
 # Make sure OPENCL AND CUDA ARE NOT BOTH ENABLED
 option( BUILD_OPENCL "Build with OpenCL support (VS 2008 only at the moment)" OFF) 
@@ -70,6 +71,8 @@ endif()
 mark_as_advanced(WRAP_PYTHON)
 mark_as_advanced(BUILD_ZERNIKE)
 mark_as_advanced(BUILD_CURVELETS)
+mark_as_advanced(BUILD_ILLUMINATION)
+
 include_directories( ${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR} )
 
 
@@ -223,7 +226,7 @@ else(QT4_FOUND)
 endif(QT4_FOUND)
 
 # Find Boost
-if( BUILD_PROJPROC_WITH_MONT_SEG )
+if( BUILD_PROJPROC_WITH_MONT_SEG OR BUILD_ILLUMINATION )
   set(Boost_USE_STATIC_LIBS ON)
   set(Boost_USE_MULTITHREADED ON)
   set(Boost_DEBUG true )
@@ -384,7 +387,6 @@ set( common_libraries
   ftkSpectralUnmixing
   ftkGUI
   ftkGraphs
-  IlluminationCorrection
   PatternAnalysis
   tinyxml
   )
@@ -523,6 +525,16 @@ endif(BUILD_PIPELINE)
 if(BUILD_CURVELETS)
   add_subdirectory( Tracing/Preprocessing/CurveletFiltering/fdct_wrapping_cpp/src )
 endif(BUILD_CURVELETS)
+
+if(BUILD_ILLUMINATION)
+  add_subdirectory( IlluminationCorrection )
+endif(BUILD_ILLUMINATION)
+
+#####################################################################################
+# Add insight Journal filters as sources for all projects. Most of them are
+# pretty useful
+####################################################################################
+INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/InsightJournalFilters/MinErrorThresholding )
 
 #####################################################################################
 # SOME install RULES

@@ -78,7 +78,6 @@ SET( prepr_SRCS
 
 INCLUDE_DIRECTORIES(gvc)
 
-
 #######################################
 # ADD CUDA FILES HERE
 #######################################

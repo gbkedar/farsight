@@ -1,4 +1,3 @@
-INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/InsightJournalFilters/MinErrorThresholding )
 ADD_LIBRARY( ftkPreprocess
 	ftkPreprocess2.h
 	ftkPreprocess2.cpp
