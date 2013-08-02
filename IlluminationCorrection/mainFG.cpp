@@ -16,7 +16,7 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_MEAN_PROJECTIONS
 
 #include <vector>
 #include <algorithm>
@@ -58,6 +58,7 @@
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 5.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
+#define RegressPar 10	//Number of regression problems to be run in parallel
 
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14    //((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
@@ -99,6 +100,25 @@ template<typename InputImageType> void WriteITKImage
     exit( EXIT_FAILURE );
   }
   return;
+}
+
+template<typename InputImageType> itk::SmartPointer<InputImageType>
+  ReadITKImage( std::string inputName )
+{
+  typedef typename itk::ImageFileReader< InputImageType > ReaderType;
+  typename ReaderType::Pointer reader = ReaderType::New();
+  reader->SetFileName( inputName.c_str() );
+  try
+  {
+    reader->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  typename InputImageType::Pointer inputImagePointer = reader->GetOutput();
+  return inputImagePointer;
 }
 
 template<typename InputImageType, typename OutputImageType> 
@@ -1004,6 +1024,51 @@ std::vector< itk::SmartPointer< CostImageType > >
   return returnVec;
 }
 
+void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads )
+{
+  bool regress = true;
+  double lambda1=0.1, lambda2=0.1;
+  std::cout<<"Starting regression\n"<<std::flush;
+  unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
+  bool lambdaChanged = false;
+  while( regress )
+  {
+    bool useCholesky = true;
+    mlpack::regression::LARS lars(useCholesky, lambda1, lambda2);
+    arma::vec beta;
+    lars.Regress( matX, matY, beta, true );
+    unsigned zeroCount = 0;
+    for( itk::SizeValueType i=0; i<numCoeffs; ++i )
+    {
+      if( !beta(i,0) )
+	++zeroCount;
+      outCoeffs.at(i) = beta(i,0);
+      std::cout<<outCoeffs.at(i)<<"\t";
+    }
+    std::cout<<"\n";
+    if( zeroCount==zeroCountPrev )
+      ++countAtCurrent;
+    else
+      countAtCurrent=0;
+    if( !zeroCount || (zeroCount<4 && countAtCurrent>2) )
+    {
+      regress=false;
+      if( zeroCount )
+      {
+	for( unsigned i=0; i<countAtCurrent; ++i )
+	{
+	  lambda1*=2.0; lambda2*=sqrt(2.0);
+	}
+      }
+    }
+    else
+      lambda1/=2.0; lambda2/=sqrt(2.0);
+    zeroCountPrev=zeroCount;
+  }
+  std::cout<<"Done regression\n"<<std::flush;
+}
+
+
 typedef std::vector<double> DblVec;
 void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec &ImVals,
 	DblVec &normConstants, unsigned normIndex //Idex to store the normalization consts
@@ -1013,7 +1078,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 #if ORDER>3
 		, DblVec X4, DblVec X3Y, DblVec X2Y2, DblVec XY3, DblVec Y4
 #endif
-		, DblVec &outCoeffs )
+		, DblVec &outCoeffs, int numThreads )
 {
 //Take log of ImVals and at the same time ignore vals and indices where they are 
 //equal to std::numeric_limits<unsigned short>::max()
@@ -1030,7 +1095,8 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 	, X4Norm=0, X3YNorm=0, X2Y2Norm=0, XY3Norm=0, Y4Norm=0
 #endif
 	;
-  for( itk::SizeValueType i=0; i<ImVals.size(); ++i )
+
+  for( itk::IndexValueType i=0; i<ImVals.size(); ++i )
   {
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
@@ -1046,12 +1112,14 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
     else
       ++countFail;
   }
+
   double countIndex = ImVals.size()-countFail;
   XMean/=countIndex; YMean/=countIndex;
   X2Mean/=countIndex; Y2Mean/=countIndex; XYMean/=countIndex; ImValsMean/=countIndex;
   X3Mean/=countIndex; X2YMean/=countIndex; XY2Mean/=countIndex; Y3Mean/=countIndex;
   X4Mean/=countIndex; X3YMean/=countIndex; X2Y2Mean/=countIndex; XY3Mean/=countIndex; Y4Mean/=countIndex;
-  for( itk::SizeValueType i=0; i<ImVals.size(); ++i )
+
+  for( itk::IndexValueType i=0; i<ImVals.size(); ++i )
   {
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
@@ -1072,6 +1140,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 #endif
     }
   }
+
   //Store the normalization constants
   normConstants.at(normIndex)=XMean; normConstants.at(normIndex+1)=YMean;
   normConstants.at(normIndex+2)=X2Mean; normConstants.at(normIndex+3)=Y2Mean;
@@ -1102,49 +1171,37 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   X4Norm=sqrt(X4Norm); X3YNorm=sqrt(X3YNorm); X2Y2Norm=sqrt(X2Y2Norm); XY3Norm=sqrt(XY3Norm);
   Y4Norm=sqrt(Y4Norm);
 #endif
-  std::cout<<"Setting up LARS\n"<<std::flush;
-  arma::mat matX( ImVals.size()-countFail, numCoeffs );
+  arma::mat matX( numCoeffs, ImVals.size()-countFail );
   arma::mat matY( ImVals.size()-countFail, 1 );
-  std::cout<<"Starting LARS X has "<<matX.n_rows<<" rows, "<<matX.n_cols
-	<<" cols, Y has "<<matY.n_elem<<" elements\n"<< std::flush;
-  for( itk::SizeValueType i=0,j=0; i<ImVals.size(); ++i )
+
+  for( itk::IndexValueType i=0,j=0; i<ImVals.size(); ++i )
   {
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
-	std::cout<<"1st order\n"<<std::flush;
 	X.at(i)/=XNorm; Y.at(i)/=YNorm; X2.at(i)/=X2Norm; Y2.at(i)/=Y2Norm; XY.at(i)/=XYNorm;
 	matX(0,j)=X.at(i); matX(1,j)=Y.at(i); matX(2,j)=X2.at(i); matX(3,j)=Y2.at(i); matX(4,j)=XY.at(i);
 	ImVals.at(i)/=ImValsNorm;
 	matY(j,0)=ImVals.at(i);
 #if ORDER>2
-	std::cout<<"2nd order\n"<<std::flush;
 	X3.at(i)/=X3Norm; X2Y.at(i)/=X2YNorm; XY2.at(i)/=XY2Norm; Y3.at(i)/=Y3Norm;
 	matX(5,j)=X3.at(i); matX(6,j)=X2Y.at(i); matX(7,j)=XY2.at(i); matX(8,j)=Y3.at(i);
 #endif
 #if ORDER>3
-	std::cout<<"3rd order\n"<<std::flush;
 	X4.at(i)/=X4Norm; X3Y.at(i)/=X3YNorm; X2Y2.at(i)/=X2Y2Norm; XY3.at(i)/=XY3Norm;	Y4.at(i)/=Y4Norm;
 	matX(9,j)=X4.at(i); matX(10,j)=X3Y.at(i); matX(11,j)=X2Y2.at(i); matX(12,j)=XY3.at(i);
 	matX(13,j)=Y4.at(i);
 #endif
 	++j;
     }
-    std::cout<<"i="<<i<<", j="<<j<<std::endl;
   }
-  double lambda1=0.1, lambda2=0.1;
-  bool useCholesky = true;
-  mlpack::regression::LARS lars(useCholesky, lambda1, lambda2);
-  arma::vec beta;
-  lars.Regress(matX, matY.unsafe_col(0), beta, false /* do not transpose */);
-  std::cout<<beta<<std::endl;
-  std::cout<<"LARS done\n"<<std::flush;
+  Regresss( matX, matY, outCoeffs, numThreads );
   return;
 }
 
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
   std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
-  std::vector<double> &normConstants )
+  std::vector<double> &normConstants, int numThreads )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   std::vector<double>
@@ -1185,7 +1242,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 #if ORDER>3
 		, X4, X3Y, X2Y2, XY3, Y4
 #endif
-		, flPolyCoeffs );
+		, flPolyCoeffs, numThreads );
   RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants, 2*numCoeffs
   							  //Index to store the normalization consts
 #if ORDER>2
@@ -1194,7 +1251,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 #if ORDER>3
 		, X4, X3Y, X2Y2, XY3, Y4
 #endif
-		, AFPolyCoeffs );
+		, AFPolyCoeffs, numThreads );
   RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants, 4*numCoeffs
   							  //Idex to store the normalization consts
 #if ORDER>2
@@ -1203,7 +1260,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 #if ORDER>3
 		, X4, X3Y, X2Y2, XY3, Y4
 #endif
-		, BGPolyCoeffs );
+		, BGPolyCoeffs, numThreads );
   return;
 }
 
@@ -1468,18 +1525,6 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 
 int main(int argc, char *argv[])
 {
-
-  arma::mat matX( 3, 2 );
-  arma::mat matY( 3, 1 );
-  std::cout<<"Starting LARS X has "<<matX.n_rows<<" rows, "<<matX.n_cols
-	<<" cols, Y has "<<matY.n_elem<<" elements\n"<< std::flush;
-  for( itk::SizeValueType i=0; i<3; ++i )
-  {
-    matX(i,0)=i; matX(i,1)=i+2;
-    matY(i,0)=(i+1)*10;
-  }
-  std::cout<<matX<<matY;
-
   if( argc < 2 )
   {
     usage(argv[0]);
@@ -1498,23 +1543,9 @@ int main(int argc, char *argv[])
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
 
-  typedef itk::ImageFileReader< US3ImageType >    ReaderType;
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 
-  ReaderType::Pointer reader = ReaderType::New();
-  reader = ReaderType::New();
-  reader->SetFileName( inputImageName.c_str() );
-  try
-  {
-    reader->Update();
-  }
-  catch (itk::ExceptionObject &e)
-  {
-    std::cerr << e << std::endl;
-    exit( EXIT_FAILURE );
-  }
-
-  US3ImageType::Pointer inputImage = reader->GetOutput();
+  US3ImageType::Pointer inputImage = ReadITKImage<US3ImageType>( inputImageName );
 
   US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
 
@@ -1685,6 +1716,16 @@ int main(int argc, char *argv[])
   }
   medFiltImages.clear();
 
+//******************
+//  std::string labelImageName = nameTemplate + "label.tif";
+//  std::string flAvgName = nameTemplate + "flAvg.tif";
+//  std::string AFAvgName = nameTemplate + "AFAvg.tif";
+//  std::string BGAvgName = nameTemplate + "BGAvg.tif";
+//  UC3ImageType::Pointer labelImage = ReadITKImage<UC3ImageType>( labelImageName );
+//  CostImageType::Pointer flAvgIm = ReadITKImage<CostImageType>( flAvgName );
+//  CostImageType::Pointer AFAvgIm = ReadITKImage<CostImageType>( AFAvgName );
+//  CostImageType::Pointer BGAvgIm = ReadITKImage<CostImageType>( BGAvgName );
+//******************
   std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
 			BGPolyCoeffs(numCoeffs,0), normConstants(2*3*numCoeffs,0);
 
@@ -1703,17 +1744,16 @@ int main(int argc, char *argv[])
 #endif
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
-
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
-			normConstants );
+			normConstants, numThreads );
   std::cout<<"Polynomials estimated\n"<<std::flush;
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
 		flAvgIm, AFAvgIm, BGAvgIm, numThreads );
-  flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
-  avgImsVec.clear();
+//  flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
+//  avgImsVec.clear();
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
