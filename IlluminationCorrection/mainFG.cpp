@@ -16,7 +16,9 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-//#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_THREE_LEVEL_LABELING
+#define DEBUG_MEAN_PROJECTIONS
+#define DEBUG_CORRECTION_SURFACES
 
 #include <vector>
 #include <algorithm>
@@ -26,6 +28,7 @@
 #include <iomanip>
 #include <float.h>
 #include <math.h>
+#include <limits.h>
 #include "new_graph.h"
 
 #ifdef _OPENMP
@@ -58,10 +61,10 @@
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 5.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
-#define RegressPar 10	//Number of regression problems to be run in parallel
 
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14    //((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
+#define RegressPar 14	//Number of regression problems to be run in parallel
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -165,6 +168,25 @@ template<typename InputImageType, typename OutputImageType> void CastNWriteImage
   typename CastFilterType::Pointer cast = CastFilterType::New();
   cast->SetInput( inputImage );
   WriteITKImage< OutputImageType >( cast->GetOutput(), outFileName );
+  return;
+}
+
+template<typename InputImageType, typename OutputImageType> void
+RescaleCastNWriteImage
+( typename itk::SmartPointer<InputImageType> inputImage,
+    std::string &outFileName )
+{
+  typedef itk::RescaleIntensityImageFilter< InputImageType, OutputImageType > RescaleFilterType;
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"This function needs equal input and output dimensions";
+    return;
+  }
+  typename RescaleFilterType::Pointer rescaleFilter = RescaleFilterType::New();
+  rescaleFilter->SetInput(inputImage);
+  rescaleFilter->SetOutputMinimum( itk::NumericTraits< typename OutputImageType::PixelType >::min() );
+  rescaleFilter->SetOutputMaximum( itk::NumericTraits< typename OutputImageType::PixelType >::max() );
+  WriteITKImage< OutputImageType >( rescaleFilter->GetOutput(), outFileName );
   return;
 }
 
@@ -1024,48 +1046,70 @@ std::vector< itk::SmartPointer< CostImageType > >
   return returnVec;
 }
 
-void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads )
+void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads,
+		double lambda1, double lambda2 )
 {
-  bool regress = true;
-  double lambda1=0.1, lambda2=0.1;
-  std::cout<<"Starting regression\n"<<std::flush;
-  unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
-  bool lambdaChanged = false;
-  while( regress )
+  bool useCholesky = true;
+
+  //Run many regression problems in parallel start by allocating space for output coeffs
+  std::vector< std::vector< double > > coeffsParallel;
+  int numCoeffsPar = numThreads<RegressPar ? numThreads : RegressPar;
+  for( int i=0;i<numCoeffsPar; ++i )
   {
-    bool useCholesky = true;
-    mlpack::regression::LARS lars(useCholesky, lambda1, lambda2);
+    std::vector< double > tempArr( numCoeffs, 0 );
+    coeffsParallel.push_back( tempArr );
+  }
+  double sqrt2 = sqrt(2.0);
+#ifdef _OPENMP
+  #pragma omp parallel for
+#endif //_OPENMP
+  for( int i=0;i<numCoeffsPar; ++i )
+  {
+    double lambda1Cur = lambda1 / pow( 2, ((double)i) );
+    double lambda2Cur = lambda2 / pow( sqrt2, ((double)i) );
+    mlpack::regression::LARS lars( useCholesky, lambda1Cur, lambda2Cur );
     arma::vec beta;
     lars.Regress( matX, matY, beta, true );
+    for( int j=0;j<numCoeffs; ++j )
+      coeffsParallel.at(i).at(j) = beta(j,0);
+  }
+
+  unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
+  bool lambdaChanged = false;
+  bool regress = true;
+  for( int i=0;i<numCoeffsPar; ++i )
+  {
     unsigned zeroCount = 0;
-    for( itk::SizeValueType i=0; i<numCoeffs; ++i )
+    for( int j=0; j<numCoeffs; ++j )
     {
-      if( !beta(i,0) )
+      if( !coeffsParallel.at(i).at(j) )
 	++zeroCount;
-      outCoeffs.at(i) = beta(i,0);
-      std::cout<<outCoeffs.at(i)<<"\t";
+      outCoeffs.at(j) = coeffsParallel.at(i).at(j);
     }
-    std::cout<<"\n";
     if( zeroCount==zeroCountPrev )
       ++countAtCurrent;
     else
       countAtCurrent=0;
-    if( !zeroCount || (zeroCount<4 && countAtCurrent>2) )
+    if( !zeroCount || (zeroCount<4 && countAtCurrent>1) )
     {
-      regress=false;
+      regress = false;
       if( zeroCount )
       {
-	for( unsigned i=0; i<countAtCurrent; ++i )
-	{
-	  lambda1*=2.0; lambda2*=sqrt(2.0);
-	}
+	for( unsigned j=0; j<numCoeffs; ++j )
+	  outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
       }
+      break;
     }
-    else
-      lambda1/=2.0; lambda2/=sqrt(2.0);
     zeroCountPrev=zeroCount;
   }
-  std::cout<<"Done regression\n"<<std::flush;
+  coeffsParallel.clear();
+  if( regress )
+  {
+    double lambda1Cur = lambda1 / pow( 2, ((double)(numCoeffsPar+1)) );
+    double lambda2Cur = lambda2 / pow( sqrt2, ((double)(numCoeffsPar+1)) );
+    Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur );
+  }
+  return;
 }
 
 
@@ -1126,7 +1170,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 	X.at(i)-=XMean; Y.at(i)-=YMean; X2.at(i)-=X2Mean; Y2.at(i)-=Y2Mean; XY.at(i)-=XYMean;
 	ImVals.at(i)-=ImValsMean;
 	XNorm+=(X.at(i)*X.at(i)); YNorm+=(Y.at(i)*Y.at(i)); X2Norm+=(X2.at(i)*X2.at(i));
-	Y2Norm+=(Y2.at(i)*Y2.at(i)); XYNorm+=(X.at(i)*Y.at(i));
+	Y2Norm+=(Y2.at(i)*Y2.at(i)); XYNorm+=(XY.at(i)*XY.at(i));
 	ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
 #if ORDER>2
 	X3.at(i)-=X3Mean; X2Y.at(i)-=X2YMean; XY2.at(i)-=XY2Mean; Y3.at(i)-=Y3Mean;
@@ -1140,6 +1184,16 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 #endif
     }
   }
+
+  XNorm=sqrt(XNorm); YNorm=sqrt(YNorm); X2Norm=sqrt(X2Norm); Y2Norm=sqrt(Y2Norm); XYNorm=sqrt(XYNorm);
+  ImValsNorm=sqrt(ImValsNorm);
+#if ORDER>2
+  X3Norm=sqrt(X3Norm); X2YNorm=sqrt(X2YNorm); XY2Norm=sqrt(XY2Norm); Y3Norm=sqrt(Y3Norm);
+#endif
+#if ORDER>3
+  X4Norm=sqrt(X4Norm); X3YNorm=sqrt(X3YNorm); X2Y2Norm=sqrt(X2Y2Norm); XY3Norm=sqrt(XY3Norm);
+  Y4Norm=sqrt(Y4Norm);
+#endif
 
   //Store the normalization constants
   normConstants.at(normIndex)=XMean; normConstants.at(normIndex+1)=YMean;
@@ -1162,15 +1216,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   normConstants.at(normIndex+numCoeffs+11)=X2Y2Norm; normConstants.at(normIndex+numCoeffs+12)=XY3Norm;
   normConstants.at(normIndex+numCoeffs+13)=Y4Norm;
 #endif
-  XNorm=sqrt(XNorm); YNorm=sqrt(YNorm); X2Norm=sqrt(X2Norm); Y2Norm=sqrt(Y2Norm); XYNorm=sqrt(XYNorm);
-  ImValsNorm=sqrt(ImValsNorm);
-#if ORDER>2
-  X3Norm=sqrt(X3Norm); X2YNorm=sqrt(X2YNorm); XY2Norm=sqrt(XY2Norm); Y3Norm=sqrt(Y3Norm);
-#endif
-#if ORDER>3
-  X4Norm=sqrt(X4Norm); X3YNorm=sqrt(X3YNorm); X2Y2Norm=sqrt(X2Y2Norm); XY3Norm=sqrt(XY3Norm);
-  Y4Norm=sqrt(Y4Norm);
-#endif
+
   arma::mat matX( numCoeffs, ImVals.size()-countFail );
   arma::mat matY( ImVals.size()-countFail, 1 );
 
@@ -1194,7 +1240,8 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 	++j;
     }
   }
-  Regresss( matX, matY, outCoeffs, numThreads );
+  double lambda1=0.1, lambda2=0.1;
+  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2 );
   return;
 }
 
@@ -1307,64 +1354,64 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
     double XY3  = currentIndex.X*Y3;
     double Y4   = Y2*Y2;
 #endif
-    currentIndex.FlVals = flPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(0))
-			/normConstants.at(numCoeffs)
-+flPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1)
-+flPolyCoeffs.at(2)*(X2-normConstants.at(2))/normConstants.at(numCoeffs+2)
-+flPolyCoeffs.at(3)*(Y2-normConstants.at(3))/normConstants.at(numCoeffs+3)
-+flPolyCoeffs.at(4)*(XY-normConstants.at(4))/normConstants.at(numCoeffs+4)
+    currentIndex.FlVals = flPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(0))
+			/normConstants.at(numCoeffs))
++flPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1))
++flPolyCoeffs.at(2)*((X2-normConstants.at(2))/normConstants.at(numCoeffs+2))
++flPolyCoeffs.at(3)*((Y2-normConstants.at(3))/normConstants.at(numCoeffs+3))
++flPolyCoeffs.at(4)*((XY-normConstants.at(4))/normConstants.at(numCoeffs+4))
 #if ORDER>2
-+flPolyCoeffs.at(5)*(X3 -normConstants.at(5))/normConstants.at(numCoeffs+5)
-+flPolyCoeffs.at(6)*(X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6)
-+flPolyCoeffs.at(7)*(XY2-normConstants.at(7))/normConstants.at(numCoeffs+7)
-+flPolyCoeffs.at(8)*(Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8)
++flPolyCoeffs.at(5)*((X3 -normConstants.at(5))/normConstants.at(numCoeffs+5))
++flPolyCoeffs.at(6)*((X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6))
++flPolyCoeffs.at(7)*((XY2-normConstants.at(7))/normConstants.at(numCoeffs+7))
++flPolyCoeffs.at(8)*((Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8))
 #endif
 #if ORDER>3
-+flPolyCoeffs.at(9) *(X4  -normConstants.at(9))/normConstants.at(numCoeffs+9)
-+flPolyCoeffs.at(10)*(X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10)
-+flPolyCoeffs.at(11)*(X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11)
-+flPolyCoeffs.at(12)*(XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12)
-+flPolyCoeffs.at(13)*(Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13)
++flPolyCoeffs.at(9) *((X4  -normConstants.at(9))/normConstants.at(numCoeffs+9))
++flPolyCoeffs.at(10)*((X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10))
++flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11))
++flPolyCoeffs.at(12)*((XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12))
++flPolyCoeffs.at(13)*((Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13))
 #endif
 	;
-    currentIndex.AFVals = AFPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(2*numCoeffs))
-			/normConstants.at(3*numCoeffs)
-+AFPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1)
-+AFPolyCoeffs.at(2)*(X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2)
-+AFPolyCoeffs.at(3)*(Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3)
-+AFPolyCoeffs.at(4)*(XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4)
+    currentIndex.AFVals = AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs))
+			/normConstants.at(3*numCoeffs))
++AFPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1))
++AFPolyCoeffs.at(2)*((X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2))
++AFPolyCoeffs.at(3)*((Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3))
++AFPolyCoeffs.at(4)*((XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4))
 #if ORDER>2
-+AFPolyCoeffs.at(5)*(X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5)
-+AFPolyCoeffs.at(6)*(X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6)
-+AFPolyCoeffs.at(7)*(XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7)
-+AFPolyCoeffs.at(8)*(Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8)
++AFPolyCoeffs.at(5)*((X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5))
++AFPolyCoeffs.at(6)*((X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6))
++AFPolyCoeffs.at(7)*((XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7))
++AFPolyCoeffs.at(8)*((Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8))
 #endif
 #if ORDER>3
-+AFPolyCoeffs.at(9) *(X4  -normConstants.at(2*numCoeffs+9))/normConstants.at(3*numCoeffs+9)
-+AFPolyCoeffs.at(10)*(X3Y -normConstants.at(2*numCoeffs+10))/normConstants.at(3*numCoeffs+10)
-+AFPolyCoeffs.at(11)*(X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11)
-+AFPolyCoeffs.at(12)*(XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12)
-+AFPolyCoeffs.at(13)*(Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13)
++AFPolyCoeffs.at(9) *((X4  -normConstants.at(2*numCoeffs+9))/normConstants.at(3*numCoeffs+9))
++AFPolyCoeffs.at(10)*((X3Y -normConstants.at(2*numCoeffs+10))/normConstants.at(3*numCoeffs+10))
++AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11))
++AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12))
++AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13))
 #endif
 	;
-currentIndex.BGVals = BGPolyCoeffs.at(0)*(currentIndex.X-normConstants.at(4*numCoeffs))
-			/normConstants.at(5*numCoeffs)
-+BGPolyCoeffs.at(1)*(currentIndex.Y -normConstants.at(4*numCoeffs+1))/normConstants.at(5*numCoeffs+1)
-+BGPolyCoeffs.at(2)*(X2-normConstants.at(4*numCoeffs+2))/normConstants.at(5*numCoeffs+2)
-+BGPolyCoeffs.at(3)*(Y2-normConstants.at(4*numCoeffs+3))/normConstants.at(5*numCoeffs+3)
-+BGPolyCoeffs.at(4)*(XY-normConstants.at(4*numCoeffs+4))/normConstants.at(5*numCoeffs+4)
+currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*numCoeffs))
+			/normConstants.at(5*numCoeffs))
++BGPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(4*numCoeffs+1))/normConstants.at(5*numCoeffs+1))
++BGPolyCoeffs.at(2)*((X2-normConstants.at(4*numCoeffs+2))/normConstants.at(5*numCoeffs+2))
++BGPolyCoeffs.at(3)*((Y2-normConstants.at(4*numCoeffs+3))/normConstants.at(5*numCoeffs+3))
++BGPolyCoeffs.at(4)*((XY-normConstants.at(4*numCoeffs+4))/normConstants.at(5*numCoeffs+4))
 #if ORDER>2
-+BGPolyCoeffs.at(5)*(X3 -normConstants.at(4*numCoeffs+5))/normConstants.at(5*numCoeffs+5)
-+BGPolyCoeffs.at(6)*(X2Y-normConstants.at(4*numCoeffs+6))/normConstants.at(5*numCoeffs+6)
-+BGPolyCoeffs.at(7)*(XY2-normConstants.at(4*numCoeffs+7))/normConstants.at(5*numCoeffs+7)
-+BGPolyCoeffs.at(8)*(Y3 -normConstants.at(4*numCoeffs+8))/normConstants.at(5*numCoeffs+8)
++BGPolyCoeffs.at(5)*((X3 -normConstants.at(4*numCoeffs+5))/normConstants.at(5*numCoeffs+5))
++BGPolyCoeffs.at(6)*((X2Y-normConstants.at(4*numCoeffs+6))/normConstants.at(5*numCoeffs+6))
++BGPolyCoeffs.at(7)*((XY2-normConstants.at(4*numCoeffs+7))/normConstants.at(5*numCoeffs+7))
++BGPolyCoeffs.at(8)*((Y3 -normConstants.at(4*numCoeffs+8))/normConstants.at(5*numCoeffs+8))
 #endif
 #if ORDER>3
-+BGPolyCoeffs.at(9) *(X4   -normConstants.at(4*numCoeffs+9))/normConstants.at(5*numCoeffs+9)
-+BGPolyCoeffs.at(10)*(X3Y -normConstants.at(4*numCoeffs+10))/normConstants.at(5*numCoeffs+10)
-+BGPolyCoeffs.at(11)*(X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11)
-+BGPolyCoeffs.at(12)*(XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12)
-+BGPolyCoeffs.at(13)*(Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13)
++BGPolyCoeffs.at(9) *((X4   -normConstants.at(4*numCoeffs+9))/normConstants.at(5*numCoeffs+9))
++BGPolyCoeffs.at(10)*((X3Y -normConstants.at(4*numCoeffs+10))/normConstants.at(5*numCoeffs+10))
++BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11))
++BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12))
++BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13))
 #endif
     ;
     currentIndex.FlVals = (currentIndex.AFVals+currentIndex.FlVals)/2;//Fl surface can be skewed by noise
@@ -1445,17 +1492,17 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 0 );
   double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 1 );
   double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
-  //double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 ); Using the same rage as AF
-  //double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 2, 0 ); Since BG is kinda noisy
-  double BGMaxImage = AFMaxImage;
-  double BGMinImage = AFMinImage;
+  double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 );// Using the same rage as AF
+  double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 2, 0 );// Since BG is kinda noisy
+  BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
+  //double BGMinImage = AFMinImage;
 
   std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
 
   //Rescale to between 0 and max-min for all three surfaces
   double flMinSurface, flMaxSurface, AFMaxSurface, AFMinSurface, BGMaxSurface, BGMinSurface;
-  flMinSurface = AFMinSurface = BGMinSurface = std::numeric_limits<unsigned short>::max();
-  flMaxSurface = AFMaxSurface = BGMaxSurface = 0;
+  flMinSurface = AFMinSurface = BGMinSurface = std::numeric_limits< double >::max();
+  flMaxSurface = AFMaxSurface = BGMaxSurface = -std::numeric_limits< double >::max();
   for( itk::IndexValueType i=0; i<IndexVector.size(); ++i )
   {
     if( flMinSurface>IndexVector.at(i).FlVals ) flMinSurface=IndexVector.at(i).FlVals;
@@ -1468,6 +1515,7 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   double flRatio = (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface);
   double AFRatio = (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface);
   double BGRatio = (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface);
+  std::cout<<"Fl: "<<flRatio<<"\tAF: "<<AFRatio<<"\tBG: "<<BGRatio<<"\n"<<std::flush;
   CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CostImageType::New();
   CostImageType::Pointer AFSurf = CostImageType::New();
@@ -1486,6 +1534,15 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface)*AFRatio );
     BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface)*BGRatio );
   }
+
+#ifdef DEBUG_CORRECTION_SURFACES
+  std::string flSurfName = nameTemplate+"FlSurface.tif";
+  std::string AFSurfName = nameTemplate+"AFSurface.tif";
+  std::string BGSurfName = nameTemplate+"BGSurface.tif";
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(BGSurf,BGSurfName);
+#endif
 
   size[2] = 1; //Process one slice at a time
 #ifdef _OPENMP
@@ -1542,11 +1599,7 @@ int main(int argc, char *argv[])
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
-
-  typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
-
   US3ImageType::Pointer inputImage = ReadITKImage<US3ImageType>( inputImageName );
-
   US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
 
   itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
@@ -1567,6 +1620,7 @@ int main(int argc, char *argv[])
   resacledImages.resize( numSlices );
 #endif //DEBUG_RESCALING_N_COST_EST
 
+  typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -1692,13 +1746,13 @@ int main(int argc, char *argv[])
 
   std::cout<<std::endl<<std::flush;
 
-#ifdef DEBUG_MEAN_PROJECTIONS
+#ifdef DEBUG_THREE_LEVEL_LABELING
   std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
   std::string labelImageName = nameTemplate + "label.tif";
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 #endif
 
-  std::cout<<"Comuting mean Images\n"<<std::flush;
+  std::cout<<"Computing mean Images\n"<<std::flush;
   std::vector< itk::SmartPointer< CostImageType > > avgImsVec = 
 	ComputeMeanImages( labelImage, medFiltImages, numThreads );
 
@@ -1752,8 +1806,8 @@ int main(int argc, char *argv[])
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
 		flAvgIm, AFAvgIm, BGAvgIm, numThreads );
-//  flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
-//  avgImsVec.clear();
+  flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
+  avgImsVec.clear();
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
