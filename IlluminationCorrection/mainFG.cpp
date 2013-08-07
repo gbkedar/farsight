@@ -16,7 +16,7 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-//#define DEBUG_THREE_LEVEL_LABELING
+#define DEBUG_THREE_LEVEL_LABELING
 #define DEBUG_MEAN_PROJECTIONS
 #define DEBUG_CORRECTION_SURFACES
 
@@ -1414,7 +1414,7 @@ currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*num
 +BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13))
 #endif
     ;
-    currentIndex.FlVals = (currentIndex.AFVals+currentIndex.FlVals)/2;//Fl surface can be skewed by noise
+//    currentIndex.FlVals = (currentIndex.AFVals+currentIndex.FlVals)/2;//Fl surface can be skewed by noise
     IndexVector.push_back( currentIndex );
   }
   return;
@@ -1494,7 +1494,7 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
   double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 );// Using the same rage as AF
   double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 2, 0 );// Since BG is kinda noisy
-  BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
+  //BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
   //double BGMinImage = AFMinImage;
 
   std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
@@ -1542,7 +1542,7 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
   RescaleCastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
   RescaleCastNWriteImage<CostImageType,US2ImageType>(BGSurf,BGSurfName);
-#endif
+#endif //DEBUG_CORRECTION_SURFACES
 
   size[2] = 1; //Process one slice at a time
 #ifdef _OPENMP
@@ -1750,7 +1750,7 @@ int main(int argc, char *argv[])
   std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
   std::string labelImageName = nameTemplate + "label.tif";
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
-#endif
+#endif //DEBUG_THREE_LEVEL_LABELING
 
   std::cout<<"Computing mean Images\n"<<std::flush;
   std::vector< itk::SmartPointer< CostImageType > > avgImsVec = 
@@ -1795,7 +1795,7 @@ int main(int argc, char *argv[])
   CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
   CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
   CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
-#endif
+#endif //DEBUG_MEAN_PROJECTIONS
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
