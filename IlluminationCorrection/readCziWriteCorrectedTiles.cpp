@@ -103,7 +103,7 @@ TileImageType::Pointer GetTile( OutputImageType::Pointer readImage, itk::IndexVa
 }
 
 //Reads a 5D 16-bit czi image and writes out 3D nrrd images with the redundant dimensions collapsed
-void RunTempNrrdFileWriter ( std::string inputFileName )
+void RunTempNrrdFileWriter ( std::string inputFileName, int numThreads )
 {
   typedef itk::StreamingImageFilter< InputImageType, InputImageType > StreamingFilter;
   typedef itk::ImageFileReader< InputImageType > ReaderType;
@@ -193,7 +193,7 @@ void RunTempNrrdFileWriter ( std::string inputFileName )
 
     //Write slices to images
 #ifdef _OPENMP
-  #pragma omp parallel for
+  #pragma omp parallel for num_threads(numThreads)
 #endif
     for( itk::IndexValueType j=0; j<numChannels; ++j )
     {
@@ -227,15 +227,18 @@ int main(int argc, char *argv[])
 {
   if( argc < 2 )
   {
-    std::cerr<<"Usage:"<<argv[0]<<" InputCziFile\n";
+    std::cerr<<"Usage:"<<argv[0]<<" InputCziFile num_threads(optional-default 6)\n";
     std::cerr << "PRESS ENTER TO EXIT\n";
     getchar();
     return EXIT_FAILURE;
   }
 
   std::string inputFilename = argv[1];
+  int numThreads = 6;
+  if( argc == 3 )
+    numThreads = atoi( argv[2] );
   
-  RunTempNrrdFileWriter( inputFilename );
+  RunTempNrrdFileWriter( inputFilename, numThreads );
 
   return EXIT_SUCCESS;
 }
