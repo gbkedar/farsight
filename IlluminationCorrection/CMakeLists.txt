@@ -1,5 +1,5 @@
 SET( GenerateTilesNPairList_SRCS mainTilesNPairs.cpp )
-SET( Illumination_SRCS illuminationFull.cpp )
+SET( Illumination_SRCS IlluminationFull.cpp )
 SET( CziToNrrd_SRCS readCziWriteCorrectedTiles.cpp )
 
 INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/NuclearSegmentation/yousef_core/cell_binarization )
