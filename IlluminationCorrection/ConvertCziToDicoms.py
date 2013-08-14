@@ -6,6 +6,7 @@ class TkFileDialog(Tkinter.Frame):
 
     pform = platform.system()
     self.execExt = ''
+    self.execPref = ''
     if pform.lower() == 'windows':
       self.execExt = '.exe'
 
@@ -44,16 +45,19 @@ class PassFileNamesFromCLInsteadOfTk():
   def __init__(self, files):
     pform = platform.system()
     self.execExt = ''
+    self.execPref = ''
     if pform.lower() == 'windows':
       self.execExt = '.exe'
+    else:
+      self.execPref = './'
     numCores = multiprocessing.cpu_count()
-    self.numCoresToUse = int( round(numCores*0.9,0) );
-    skip = 1
-    for filename in files:
-      if skip:
-        skip = 0
-      else:
-        self.WriteNrrdTilesFromCziNShadeCorrect(filename)
+    self.numCoresToUse = str(int( round(numCores*0.9,0) ));
+    skip = 1							#No gui code
+    for filename in files:					#
+      if skip:							#
+        skip = 0						#
+      else:							#
+        self.WriteNrrdTilesFromCziNShadeCorrect(filename)	#
 
   def register( self ):
     #files = self.askopenfilename()
@@ -69,24 +73,29 @@ class PassFileNamesFromCLInsteadOfTk():
 
   def WriteNrrdTilesFromCziNShadeCorrect( self, filename ):
     #Get Metadata
-#    self.RunBioformatsMetaReader(filename)
+    self.RunBioformatsMetaReader(filename)
     #Nrrd files before conversion
     searchStr = os.path.dirname(filename)+'/*.nrrd'
     filesThatExistPre = glob.glob(searchStr)
     #Write Nrrd files
-    nrrdConverter = 'CziToNrrd'+self.execExt
+    nrrdConverter = self.execPref+'CziToNrrd'+self.execExt
     args = [ nrrdConverter, filename, self.numCoresToUse ]
-#    self.RunExec( args )
+    self.RunExec( args, filename )
     #Search and stitch new nrrd files into dicoms
-    dicomConverter = 'NrrdToDicom'+self.execExt
+    IlluminationEx = self.execPref+'Illumination'+self.execExt
+    dicomConverter = self.execPref+'NrrdToDicom'+self.execExt
     filesThatExistPost = glob.glob(searchStr)
     for nrrdFile in filesThatExistPost:
       noSkip = 1
       if any(nrrdFile in nrrdFileNoConvert for nrrdFileNoConvert in filesThatExistPre):
         noSkip = 0
       if noSkip:
-        args = [ dicomConverter, nrrdFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
-#        self.RunExec( args )
+        args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
+#        self.RunExec( args, nrrdFile )
+	nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
+        args = [ dicomConverter, nrrdIllFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
+#        self.RunExec( args, nrrdIllFile )
+	print nrrdFile, nrrdIllFile
 
   def RunBioformatsMetaReader( self, filename ):
     xmlFilename = os.path.splitext(filename)[0]+'.xml'
@@ -103,7 +112,7 @@ class PassFileNamesFromCLInsteadOfTk():
     f0.write( stderr )
     f0.close()
 
-  def RunExec( self, args ):
+  def RunExec( self, args, filename ):
     errFilename = os.path.splitext(filename)[0]+'.errlog'
     logFilename = os.path.splitext(filename)[0]+'.log'
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -116,7 +125,7 @@ class PassFileNamesFromCLInsteadOfTk():
     f2.close()
 
 if __name__=='__main__':
-  PassFileNamesFromCLInsteadOfTk(sys.argv)
+  PassFileNamesFromCLInsteadOfTk(sys.argv)	#No gui code
 '''  root = Tkinter.Tk()
   TkFileDialog(root).pack()
   root.mainloop()'''
