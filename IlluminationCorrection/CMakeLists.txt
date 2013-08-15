@@ -1,6 +1,7 @@
 SET( GenerateTilesNPairList_SRCS mainTilesNPairs.cpp )
 SET( Illumination_SRCS IlluminationFull.cpp )
 SET( CziToNrrd_SRCS readCziWriteCorrectedTiles.cpp )
+SET( NrrdToDicom_SRCS NrrdToDicom.cpp )
 
 INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/NuclearSegmentation/yousef_core/cell_binarization )
 
@@ -16,7 +17,9 @@ INCLUDE_DIRECTORIES( ${MLPack_INCLUDE_DIR} )
 INCLUDE_DIRECTORIES( ${LIBXML2_INCLUDE_DIR} )
 
 ADD_EXECUTABLE( Illumination ${Illumination_SRCS} )
-TARGET_LINK_LIBRARIES( Illumination ${ITK_LIBRARIES} ${MLPack_LIBRARY}
-				${LIBXML2_LIBRARIES} )
+TARGET_LINK_LIBRARIES( Illumination ${ITK_LIBRARIES} ${MLPack_LIBRARY} ${LIBXML2_LIBRARIES} )
 
-INSTALL( TARGETS GenerateTilesNPairList Illumination RUNTIME DESTINATION ${INSTALL_BIN_DIR} )
+ADD_EXECUTABLE( NrrdToDicom ${NrrdToDicom_SRCS} )
+TARGET_LINK_LIBRARIES( NrrdToDicom ${ITK_LIBRARIES} TinyXML ${Boost_LIBRARIES} )
+
+INSTALL( TARGETS GenerateTilesNPairList Illumination CziToNrrd RUNTIME DESTINATION ${INSTALL_BIN_DIR} )

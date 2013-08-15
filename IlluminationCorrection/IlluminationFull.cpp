@@ -1515,7 +1515,9 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   double flRatio = (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface);
   double AFRatio = (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface);
   double BGRatio = (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface);
-  std::cout<<"Fl: "<<flRatio<<"\tAF: "<<AFRatio<<"\tBG: "<<BGRatio<<"\n"<<std::flush;
+  std::cout<<"Fl: "<<flRatio<<" "<<(flMaxImage-flMinImage)
+	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
+	<<"\tBG: "<<BGRatio<<" "<<(BGMaxImage-BGMinImage)<<"\n"<<std::flush;
   CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CostImageType::New();
   CostImageType::Pointer AFSurf = CostImageType::New();
