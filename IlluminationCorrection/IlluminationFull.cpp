@@ -82,7 +82,7 @@ std::string nameTemplate;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24)\n";
+	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24) UseSignleLevel(Default=0)\n";
 }
 
 template<typename InputImageType> void WriteITKImage
@@ -1248,7 +1248,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
   std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
-  std::vector<double> &normConstants, int numThreads )
+  std::vector<double> &normConstants, int numThreads, int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   std::vector<double>
@@ -1282,6 +1282,8 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
     Y4.push_back( Y2.back()*Y2.back() );
 #endif
   }
+  if( !useSingleLev )
+{
   RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants, 0 //Idex to store the normalization consts
 #if ORDER>2
 		, X3, X2Y, XY2, Y3
@@ -1299,6 +1301,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 		, X4, X3Y, X2Y2, XY3, Y4
 #endif
 		, AFPolyCoeffs, numThreads );
+}
   RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants, 4*numCoeffs
   							  //Idex to store the normalization consts
 #if ORDER>2
@@ -1311,9 +1314,9 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
   return;
 }
 
-typedef struct
-{  double X, Y, FlVals, AFVals, BGVals;
-} IndexStructType;
+struct IndexStructType
+{ double X, Y, FlVals, AFVals, BGVals;
+};
 
 void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
 	std::vector< IndexStructType > &IndexVector, std::vector<double> &normConstants,
@@ -1421,28 +1424,37 @@ currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*num
 }
 
 bool flMax( const IndexStructType &a, const IndexStructType &b)
-{ return a.FlVals > b.FlVals; }
+{ return (a.FlVals > b.FlVals); }
+
 bool AFMax( const IndexStructType &a, const IndexStructType &b)
-{ return a.AFVals > b.AFVals; }
+{ return (a.AFVals > b.AFVals); }
+
 bool BGMax( const IndexStructType &a, const IndexStructType &b)
-{ return a.BGVals > b.BGVals; }
+{ return (a.BGVals > b.BGVals); }
+
 bool IndMin( const IndexStructType &a, const IndexStructType &b)
-{ if( a.Y==b.Y ) return a.X < b.X; else return a.Y < b.Y; }
+{ if( a.Y==b.Y ) return (a.X < b.X); else return (a.Y < b.Y); }
 
 double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
 	CostImageType::Pointer currentAvgIm, unsigned channel, bool flagMinMax )
 {
   typedef itk::ImageRegionIterator< CostImageType > CostIterType;
   double returnValue=0;
-  if( channel==0 )
-    if( flagMinMax )
-      std::sort( IndexVector.begin(), IndexVector.end(), flMax );
-  else if( channel==1 )
-    if( flagMinMax )
-      std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
-  else
-    if( flagMinMax )
-      std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
+  if( channel==0 && flagMinMax )
+  {
+    std::cout<<"Sorting FG\n";
+    std::sort( IndexVector.begin(), IndexVector.end(), flMax );
+  }
+  if( channel==1 && flagMinMax )
+  {
+    std::cout<<"Sorting AF\n";
+    std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
+  }
+  if( channel==2 && flagMinMax )
+  {
+    std::cout<<"Sorting BG\n";
+    std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
+  }
   CostIterType costIter( currentAvgIm, currentAvgIm->GetLargestPossibleRegion() );
   itk::SizeValueType count=MinMax;
   if( flagMinMax )
@@ -1475,7 +1487,8 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
-	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm, int numThreads )
+	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm, int numThreads,
+	int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > InputIterType;
@@ -1488,12 +1501,12 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   std::vector< IndexStructType > IndexVector;
   GetSurfaceForIndices( inputImage, IndexVector, normConstants, flPolyCoeffs, AFPolyCoeffs,
   			BGPolyCoeffs );
-  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 1 );
-  double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, 0 );
-  double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 1 );
-  double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, 0 );
-  double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, 1 );// Using the same rage as AF
-  double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 2, 0 );// Since BG is kinda noisy
+  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, true  );
+  double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, false );
+  double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, true  );
+  double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, false );
+  double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, true  );// Using the same rage as AF
+  double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, false );// Since BG is kinda noisy
   //BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
   //double BGMinImage = AFMinImage;
 
@@ -1512,12 +1525,12 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     if( BGMinSurface>IndexVector.at(i).BGVals ) BGMinSurface=IndexVector.at(i).BGVals;
     if( BGMaxSurface<IndexVector.at(i).BGVals ) BGMaxSurface=IndexVector.at(i).BGVals;
   }
-  double flRatio = (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface);
-  double AFRatio = (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface);
-  double BGRatio = (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface);
+  double flRatio = std::abs( (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface) );
+  double AFRatio = std::abs( (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface) );
+  double BGRatio = std::abs( (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface) );
   std::cout<<"Fl: "<<flRatio<<" "<<(flMaxImage-flMinImage)
 	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
-	<<"\tBG: "<<BGRatio<<" "<<(BGMaxImage-BGMinImage)<<"\n"<<std::flush;
+	<<"\tBG: "<<BGRatio<<" Im:"<<BGMaxImage<<" "<<BGMinImage<<" Surf:"<<BGMaxSurface<<" "<<BGMinSurface<<std::endl;
   CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CostImageType::New();
   CostImageType::Pointer AFSurf = CostImageType::New();
@@ -1541,8 +1554,11 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   std::string flSurfName = nameTemplate+"FlSurface.tif";
   std::string AFSurfName = nameTemplate+"AFSurface.tif";
   std::string BGSurfName = nameTemplate+"BGSurface.tif";
+if( !useSingleLev )
+{
   RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
   RescaleCastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
+}
   RescaleCastNWriteImage<CostImageType,US2ImageType>(BGSurf,BGSurfName);
 #endif //DEBUG_CORRECTION_SURFACES
 
@@ -1571,11 +1587,10 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
       double curPix = log(inputIter.Get());
       double minusVal = 0;
       if( !labelIter.Get() ) minusVal = BGIterPerThr.Get();
-      else if( labelIter.Get()==1 ) minusVal = AFIterPerThr.Get();
-      else minusVal = flIterPerThr.Get();
+      if( labelIter.Get()==1 ) minusVal = AFIterPerThr.Get();
+      if( labelIter.Get()==2 ) minusVal = flIterPerThr.Get();
       curPix -= minusVal;
       curPix = std::floor(exp(curPix)+0.5);
-      curPix = curPix<0? 0:curPix;
       inputIter.Set( (US3ImageType::PixelType)curPix );
     }
   }
@@ -1596,8 +1611,14 @@ int main(int argc, char *argv[])
   unsigned found = inputImageName.find_last_of(".");
   nameTemplate = inputImageName.substr(0,found) + "_";
   int numThreads = 24;
-  if( argc == 3 )
+  int useSingleLev = 0;
+  if( argc > 2 )
     numThreads = atoi( argv[2] );
+  if( argc > 3 )
+  {
+    useSingleLev = atoi( argv[3] );
+    std::cout<<"Single level flag set to "<<useSingleLev<<std::endl;
+  }
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
@@ -1688,7 +1709,8 @@ int main(int argc, char *argv[])
     ++valsPerBin;
   }
 
-  ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
+  if( !useSingleLev )
+    ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
 #ifdef DEBUG_RESCALING_N_COST_EST
   				autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
 #else
@@ -1718,6 +1740,8 @@ int main(int argc, char *argv[])
 
   std::cout<<"Done! Starting Cuts\n"<<std::flush;
   unsigned count = 0;
+  if( !useSingleLev )
+{
 #ifdef _OPENMP
 #if _OPENMP >= 200805L
   #pragma omp parallel for schedule(dynamic,1) num_threads(reducedThreads9) \
@@ -1741,6 +1765,7 @@ int main(int argc, char *argv[])
 	std::cout<<(unsigned)((double)count*100.0/(double)numSlices)<<"\% Done\r"<<std::flush;
     }
   }
+}
   autoFlourCosts.clear();
   autoFlourCostsBG.clear();
   flourCosts.clear();
@@ -1794,20 +1819,23 @@ int main(int argc, char *argv[])
   std::string flAvgName = nameTemplate + "flAvg.tif";
   std::string AFAvgName = nameTemplate + "AFAvg.tif";
   std::string BGAvgName = nameTemplate + "BGAvg.tif";
+  if( !useSingleLev)
+{
   CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
   CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
+}
   CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
 #endif //DEBUG_MEAN_PROJECTIONS
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
-			normConstants, numThreads );
+			normConstants, numThreads, useSingleLev );
   std::cout<<"Polynomials estimated\n"<<std::flush;
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
-		flAvgIm, AFAvgIm, BGAvgIm, numThreads );
+		flAvgIm, AFAvgIm, BGAvgIm, numThreads, useSingleLev );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";

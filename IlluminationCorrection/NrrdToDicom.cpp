@@ -274,27 +274,27 @@ void PasteNonOverLappingSections( US2ImageType::Pointer outputImage, US3ImageTyp
     //Compute region in montage
     US2ImageType::IndexType destIndex, srcIndex;
     US2ImageType::SizeType srcSize;
-    if( !(positionVec.at(i).X - xMin) )
+    if( !(positionVec.at(i).Y - yMin) )
     {
       srcSize[0]   = currentTile->GetLargestPossibleRegion().GetSize()[0];
       destIndex[0] = 0; srcIndex[0] = 0;
     }
     else
     {
-      srcSize[0]   = currentTile->GetLargestPossibleRegion().GetSize()[0]-overlapX;
-      srcIndex[0]  = overlapX;
-      destIndex[0] = positionVec.at(i).X - xMin + overlapX;
+      srcSize[0]   = currentTile->GetLargestPossibleRegion().GetSize()[0]-overlapY;
+      srcIndex[0]  = overlapY;
+      destIndex[0] = positionVec.at(i).Y - yMin + overlapY;
     }
-    if( !(positionVec.at(i).Y - yMin) )
+    if( !(positionVec.at(i).X - xMin) )
     {
       srcSize[1]   = currentTile->GetLargestPossibleRegion().GetSize()[1];
       destIndex[1] = 0; srcIndex[1] = 0;
     }
     else
     {
-      srcSize[1]   = currentTile->GetLargestPossibleRegion().GetSize()[1]-overlapY;
-      srcIndex[1]  = overlapY;
-      destIndex[1] = positionVec.at(i).Y - yMin + overlapY;
+      srcSize[1]   = currentTile->GetLargestPossibleRegion().GetSize()[1]-overlapX;
+      srcIndex[1]  = overlapX;
+      destIndex[1] = positionVec.at(i).X - xMin + overlapX;
     }
     US2ImageType::RegionType srcRegion; srcRegion.SetSize( srcSize ); srcRegion.SetIndex( srcIndex );
     PasteImageFilterType::Pointer pasteFilter = PasteImageFilterType::New();
@@ -365,17 +365,17 @@ int main( int argc, char *argv[] )
   nrrdSize[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
 
   //Calculate size and create blank outuput image
-  US2ImageType::SizeType size; size[0] = xMax-xMin+nrrdSize[0]; size[1] = yMax-yMin+nrrdSize[1];
+  US2ImageType::SizeType size; size[1] = xMax-xMin+nrrdSize[1]; size[0] = yMax-yMin+nrrdSize[0];
   US2ImageType::Pointer outputImage = CreateDefaultCoordsNAllocateSpace<US2ImageType>(size);
 
   ISVT overlapX, overlapY;
 
   GetDelta( overlapX, overlapY, positionVec );
-  overlapX = nrrdSize[0]-overlapX;
+  overlapX = nrrdSize[1]-overlapX;
   overlapY = nrrdSize[0]-overlapY;
 
- std::cout<<"X="<<xMin<<"\t"<<xMax<<"\t"<<outputImage->GetLargestPossibleRegion().GetSize()[0]
-  	<<"\t\tY="<<yMin<<"\t"<<yMax<<"\t"<<outputImage->GetLargestPossibleRegion().GetSize()[1]
+ std::cout<<"X="<<xMin<<"\t"<<xMax<<"\t"<<outputImage->GetLargestPossibleRegion().GetSize()[1]
+  	<<"\t\tY="<<yMin<<"\t"<<yMax<<"\t"<<outputImage->GetLargestPossibleRegion().GetSize()[0]
 	<<"\t\toverlap"<<overlapX<<"\t"<<overlapY<<std::endl;
 
   std::sort( positionVec.begin(), positionVec.end() );
@@ -383,7 +383,6 @@ int main( int argc, char *argv[] )
   PasteNonOverLappingSections( outputImage, inputImage, overlapX, overlapY, positionVec, xMin, yMin, xMax, yMax, numThreads );
 
   WriteITKImage<US2ImageType>( outputImage, nameTemplate ); 
-
 
   return EXIT_SUCCESS;
 }
