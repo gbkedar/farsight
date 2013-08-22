@@ -327,7 +327,7 @@ int main( int argc, char *argv[] )
   std::string inputImageName = argv[1]; //Name of the input image
   std::string inputMetaName  = argv[2]; //Name of the input metadata file
   unsigned found = inputImageName.find_last_of(".");
-  nameTemplate = inputImageName.substr(0,found) + "_stitched.nrrd";
+  nameTemplate = inputImageName.substr(0,found) + "_stitched.tif";
 
   int numThreads = 24;
   if( argc == 4 )

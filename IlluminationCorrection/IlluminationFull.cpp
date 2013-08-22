@@ -18,7 +18,7 @@
 //#define NOISE_THR_DEBUG
 //#define DEBUG_THREE_LEVEL_LABELING
 //#define DEBUG_MEAN_PROJECTIONS
-#define DEBUG_CORRECTION_SURFACES
+//#define DEBUG_CORRECTION_SURFACES
 
 #include <vector>
 #include <algorithm>
@@ -87,7 +87,7 @@ void usage( const char *funcName )
 }
 
 template<typename InputImageType> void WriteITKImage
-  ( itk::SmartPointer<InputImageType> inputImagePointer,
+  ( typename InputImageType::Pointer inputImagePointer,
     std::string outputName )
 {
   typedef typename itk::ImageFileWriter< InputImageType > WriterType;
@@ -106,7 +106,7 @@ template<typename InputImageType> void WriteITKImage
   return;
 }
 
-template<typename InputImageType> itk::SmartPointer<InputImageType>
+template<typename InputImageType> typename InputImageType::Pointer
   ReadITKImage( std::string inputName )
 {
   typedef typename itk::ImageFileReader< InputImageType > ReaderType;
@@ -126,8 +126,8 @@ template<typename InputImageType> itk::SmartPointer<InputImageType>
 }
 
 template<typename InputImageType, typename OutputImageType> 
-  typename itk::SmartPointer<OutputImageType>  SumProject3dImageTo2d
-  ( typename itk::SmartPointer<InputImageType> inputImage )
+  typename OutputImageType::Pointer  SumProject3dImageTo2d
+  ( typename InputImageType::Pointer inputImage )
 {
   typedef typename itk::SumProjectionImageFilter< InputImageType, OutputImageType >
 	SumProjFilterType;
@@ -151,12 +151,11 @@ itk::MultiThreader::SetGlobalDefaultNumberOfThreads
 itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #endif
   typename OutputImageType::Pointer outputImage = sumProjFiltFlIm->GetOutput();
-  outputImage->Register();
   return outputImage;
 }
 
 template<typename InputImageType, typename OutputImageType> void CastNWriteImage
-  ( typename itk::SmartPointer<InputImageType> inputImage,
+  ( typename InputImageType::Pointer inputImage,
     std::string &outFileName )
 {
   typedef typename itk::CastImageFilter<InputImageType,
@@ -174,7 +173,7 @@ template<typename InputImageType, typename OutputImageType> void CastNWriteImage
 
 template<typename InputImageType, typename OutputImageType> void
 RescaleCastNWriteImage
-( typename itk::SmartPointer<InputImageType> inputImage,
+( typename InputImageType::Pointer inputImage,
     std::string &outFileName )
 {
   typedef itk::RescaleIntensityImageFilter< InputImageType, OutputImageType > RescaleFilterType;
@@ -191,10 +190,10 @@ RescaleCastNWriteImage
   return;
 }
 
-template<typename InputImageType> void CreateDefaultCoordsNAllocateSpace
-  ( itk::SmartPointer<InputImageType> inputImagePointer,
-    typename InputImageType::SizeType size )
+template<typename InputImageType> typename InputImageType::Pointer
+  CreateDefaultCoordsNAllocateSpace( typename InputImageType::SizeType size )
 {
+  typename InputImageType::Pointer inputImagePointer = InputImageType::New();
   typename InputImageType::PointType origin;
   typename InputImageType::IndexType start;
   const int imDims = InputImageType::ImageDimension;
@@ -219,11 +218,12 @@ template<typename InputImageType> void CreateDefaultCoordsNAllocateSpace
     std::cerr << "Exception caught in allocating space for image!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
+  return inputImagePointer;
 }
 
 template<typename InputImageType, typename OutputImageType>
   void CastNWriteImage2DStackOfVecsTo3D
-   ( typename std::vector< itk::SmartPointer<InputImageType> > &inputImage,
+   ( std::vector< typename InputImageType::Pointer > &inputImage,
      std::string &outFileName )
 {
   typedef typename itk::ImageRegionConstIterator< InputImageType > ConstIterType2d;
@@ -238,7 +238,6 @@ template<typename InputImageType, typename OutputImageType>
   }
 
   //Allocate space
-  typename OutputImageType::Pointer outputImage = OutputImageType::New();
   typename OutputImageType::SizeType size;
   typename OutputImageType::IndexType start;
   typename OutputImageType::RegionType region;
@@ -246,7 +245,8 @@ template<typename InputImageType, typename OutputImageType>
   size[0]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[0];
   size[1]  = inputImage.at(0)->GetLargestPossibleRegion().GetSize()[1];
   size[2]  = inputImage.size();
-  CreateDefaultCoordsNAllocateSpace<OutputImageType>( outputImage, size );
+  typename OutputImageType::Pointer outputImage =
+    CreateDefaultCoordsNAllocateSpace<OutputImageType>( size );
 
   //Cast n Write Values
   itk::SizeValueType typeMax =
@@ -272,7 +272,7 @@ template<typename InputImageType, typename OutputImageType>
   return;
 }
 
-void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readImage,
+US2ImageType::Pointer GetTile( US3ImageType::Pointer &readImage,
 		itk::SizeValueType i )
 {
   typedef itk::ExtractImageFilter< US3ImageType, US2ImageType > DataExtractType;
@@ -292,12 +292,12 @@ void GetTile( US2ImageType::Pointer &currentTile, US3ImageType::Pointer &readIma
     std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
-  currentTile = deFilter->GetOutput();
-  currentTile->Register();
+  US2ImageType::Pointer currentTile = deFilter->GetOutput();
+  return currentTile;
 }
 
 void ComputeHistogram(
-	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
+	std::vector< US2ImageType::Pointer  > &medFiltImages,
 	std::vector< double > &histogram,
 	US2ImageType::IndexType &start, US3ImageType::PixelType valsPerBin )
 {
@@ -470,7 +470,7 @@ void ComputePoissonProbability( double &alpha, std::vector<double> &pdf )
 }
 
 void returnthresh
-	( itk::SmartPointer<US2ImageType> input_image, int num_bin_levs,
+	( US2ImageType::Pointer input_image, int num_bin_levs,
 	  std::vector< US2ImageType::PixelType > &returnVec )
 {
   //Instantiate the different image and filter types that will be used
@@ -645,14 +645,14 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 }
 
 void ComputeCosts( int numThreads,
-		   std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
-		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCosts,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
-		   std::vector< itk::SmartPointer<CostImageType> > &autoFlourCostsBG,
-		   std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
+		   std::vector< US2ImageType::Pointer  > &medFiltImages,
+		   std::vector< CostImageType::Pointer > &autoFlourCosts,
+		   std::vector< CostImageType::Pointer > &flourCosts,
+		   std::vector< CostImageType::Pointer > &autoFlourCostsBG,
+		   std::vector< CostImageType::Pointer > &flourCostsBG,
 		   US3ImageType::PixelType valsPerBin
 #ifdef DEBUG_RESCALING_N_COST_EST
-, std::vector< itk::SmartPointer<US2ImageType> > &resacledImages
+, std::vector< US2ImageType::Pointer > &resacledImages
 #endif //DEBUG_RESCALING_N_COST_EST
 		   )
 {
@@ -794,9 +794,9 @@ void ComputeCosts( int numThreads,
 }
 
 void ComputeCut( itk::IndexValueType slice,
-		 std::vector< itk::SmartPointer<US2ImageType>  > &medFiltImages,
-		 std::vector< itk::SmartPointer<CostImageType> > &flourCosts,
-		 std::vector< itk::SmartPointer<CostImageType> > &flourCostsBG,
+		 std::vector< US2ImageType::Pointer  > &medFiltImages,
+		 std::vector< CostImageType::Pointer > &flourCosts,
+		 std::vector< CostImageType::Pointer > &flourCostsBG,
 		 UC3ImageType::Pointer outputImage,
 		 UC3ImageType::PixelType foregroundValue
 		)
@@ -880,9 +880,9 @@ void ComputeCut( itk::IndexValueType slice,
   delete graph;
 }
 
-std::vector< itk::SmartPointer< CostImageType > >
+std::vector< CostImageType::Pointer >
   ComputeMeanImages ( UC3ImageType::Pointer labelImage,
-	std::vector< itk::SmartPointer<US2ImageType>  > &medFiltIms, int numThreads )
+	std::vector< US2ImageType::Pointer > &medFiltIms, int numThreads )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< CostImageType3d > CostIterType3d;
@@ -892,19 +892,19 @@ std::vector< itk::SmartPointer< CostImageType > >
   US2ImageType::SizeType size;
   size[0] = medFiltIms.at(0)->GetLargestPossibleRegion().GetSize()[0];
   size[1] = medFiltIms.at(0)->GetLargestPossibleRegion().GetSize()[1];
-  CostImageType::Pointer BGAvgIm = CostImageType::New();
-  CreateDefaultCoordsNAllocateSpace<CostImageType>( BGAvgIm, size );
+  CostImageType::Pointer BGAvgIm =
+		CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
 
   US3ImageType::SizeType size3dd;
   size3dd[0] = size[0]; size3dd[1] = size[1]; size3dd[2] = numThreads;
-  CostImageType3d::Pointer flAvgCounts = CostImageType3d::New();
-  CostImageType3d::Pointer AFAvgCounts = CostImageType3d::New();
-  CostImageType3d::Pointer flAvgIms = CostImageType3d::New();
-  CostImageType3d::Pointer AFAvgIms = CostImageType3d::New();
-  CreateDefaultCoordsNAllocateSpace<CostImageType3d>( flAvgCounts, size3dd );
-  CreateDefaultCoordsNAllocateSpace<CostImageType3d>( AFAvgCounts, size3dd );
-  CreateDefaultCoordsNAllocateSpace<CostImageType3d>( flAvgIms,    size3dd );
-  CreateDefaultCoordsNAllocateSpace<CostImageType3d>( AFAvgIms,    size3dd );
+  CostImageType3d::Pointer flAvgCounts =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer AFAvgCounts =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer flAvgIms =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer AFAvgIms =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
 
   //The background needs a vector pixels on a 2D grid to be sorted
   std::vector< std::vector<US2ImageType::PixelType> > pixelVectForBG;
@@ -1039,10 +1039,10 @@ std::vector< itk::SmartPointer< CostImageType > >
       BGAvgImIter.Set( average );
     }
   }
-  std::vector< itk::SmartPointer< CostImageType > > returnVec;
-  returnVec.push_back( flAvgIm ); flAvgIm->Register();
-  returnVec.push_back( AFAvgIm ); AFAvgIm->Register();
-  returnVec.push_back( BGAvgIm ); BGAvgIm->Register();
+  std::vector< CostImageType::Pointer > returnVec; returnVec.resize(3);
+  flAvgIm->Register(); returnVec.at(0) = flAvgIm;
+  AFAvgIm->Register(); returnVec.at(1) = AFAvgIm;
+  BGAvgIm->Register(); returnVec.at(2) = BGAvgIm;
 
   return returnVec;
 }
@@ -1533,12 +1533,9 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
 	<<"\tBG: "<<BGRatio<<" Im:"<<BGMaxImage<<" "<<BGMinImage<<" Surf:"<<BGMaxSurface<<" "<<BGMinSurface<<std::endl;
   CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
-  CostImageType::Pointer flSurf = CostImageType::New();
-  CostImageType::Pointer AFSurf = CostImageType::New();
-  CostImageType::Pointer BGSurf = CostImageType::New();
-  CreateDefaultCoordsNAllocateSpace<CostImageType>( flSurf, size2d );
-  CreateDefaultCoordsNAllocateSpace<CostImageType>( AFSurf, size2d );
-  CreateDefaultCoordsNAllocateSpace<CostImageType>( BGSurf, size2d );
+  CostImageType::Pointer flSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
+  CostImageType::Pointer AFSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
+  CostImageType::Pointer BGSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostIterType flIter( flSurf, flSurf->GetLargestPossibleRegion() );
   CostIterType AFIter( AFSurf, AFSurf->GetLargestPossibleRegion() );
   CostIterType BGIter( BGSurf, BGSurf->GetLargestPossibleRegion() );
@@ -1631,15 +1628,15 @@ int main(int argc, char *argv[])
 
   std::cout<<"Number of slices:"<<numSlices<<std::endl;
 
-  std::vector< itk::SmartPointer<US2ImageType> > medFiltImages;
-  std::vector< itk::SmartPointer<CostImageType> > autoFlourCosts, flourCosts;
-  std::vector< itk::SmartPointer<CostImageType> > autoFlourCostsBG, flourCostsBG;
+  std::vector< US2ImageType::Pointer  > medFiltImages;
+  std::vector< CostImageType::Pointer > autoFlourCosts, flourCosts;
+  std::vector< CostImageType::Pointer > autoFlourCostsBG, flourCostsBG;
   medFiltImages.resize( numSlices );
   flourCosts.resize( numSlices );   autoFlourCosts.resize( numSlices );
   flourCostsBG.resize( numSlices ); autoFlourCostsBG.resize( numSlices );
 
 #ifdef DEBUG_RESCALING_N_COST_EST
-  std::vector< itk::SmartPointer<US2ImageType> > resacledImages;
+  std::vector< US2ImageType::Pointer > resacledImages;
   resacledImages.resize( numSlices );
 #endif //DEBUG_RESCALING_N_COST_EST
 
@@ -1670,8 +1667,7 @@ int main(int argc, char *argv[])
 #endif
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
-    US2ImageType::Pointer currentSlice;
-    GetTile( currentSlice, inputImage, (itk::SizeValueType)i );
+    US2ImageType::Pointer currentSlice = GetTile( inputImage, (itk::SizeValueType)i );
     //Median filter for each slice to remove thermal noise
     MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
@@ -1688,25 +1684,18 @@ int main(int argc, char *argv[])
     US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
     medFiltIm->Register();
     medFiltImages.at(i) = medFiltIm;
-    currentSlice->UnRegister();
     //Allocate space for costs
-    CostImageType::Pointer costs1 = CostImageType::New();
-    CostImageType::Pointer costs2 = CostImageType::New();
-    CostImageType::Pointer costs3 = CostImageType::New();
-    CostImageType::Pointer costs4 = CostImageType::New();
     CostImageType::SizeType size;
     size[0] = numRow; size[1] = numCol;
-    CreateDefaultCoordsNAllocateSpace<CostImageType>( costs1, size );
-    CreateDefaultCoordsNAllocateSpace<CostImageType>( costs2, size );
-    CreateDefaultCoordsNAllocateSpace<CostImageType>( costs3, size );
-    CreateDefaultCoordsNAllocateSpace<CostImageType>( costs4, size );
-    costs1->Register(); costs2->Register();
-    costs3->Register(); costs4->Register();
+    CostImageType::Pointer costs1 = CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
+    CostImageType::Pointer costs2 = CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
+    CostImageType::Pointer costs3 = CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
+    CostImageType::Pointer costs4 = CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
+    costs1->Register(); costs2->Register(); costs3->Register(); costs4->Register();
     autoFlourCosts.at(i)   = costs1; flourCosts.at(i)   = costs2;
     autoFlourCostsBG.at(i) = costs3; flourCostsBG.at(i) = costs4;
 #ifdef DEBUG_RESCALING_N_COST_EST
-    US2ImageType::Pointer rescIm = US2ImageType::New();
-    CreateDefaultCoordsNAllocateSpace<US2ImageType>( rescIm, size );
+    US2ImageType::Pointer rescIm = CreateDefaultCoordsNAllocateSpace<US2ImageType>( size );
     rescIm->Register();
     resacledImages.at(i) = rescIm;
 #endif //DEBUG_RESCALING_N_COST_EST
@@ -1747,12 +1736,11 @@ int main(int argc, char *argv[])
 #endif //DEBUG_RESCALING_N_COST_EST
 
   //Copy into 3d image
-  UC3ImageType::Pointer labelImage = UC3ImageType::New();
   UC3ImageType::SizeType  size;
   size[0] = numRow;
   size[1] = numCol;
   size[2] = numSlices;
-  CreateDefaultCoordsNAllocateSpace<UC3ImageType>( labelImage, size );
+  UC3ImageType::Pointer labelImage = CreateDefaultCoordsNAllocateSpace<UC3ImageType>( size );
 
   std::cout<<"Done! Starting Cuts\n"<<std::flush;
   unsigned count = 0;
@@ -1796,7 +1784,7 @@ int main(int argc, char *argv[])
 #endif //DEBUG_THREE_LEVEL_LABELING
 
   std::cout<<"Computing mean Images\n"<<std::flush;
-  std::vector< itk::SmartPointer< CostImageType > > avgImsVec = 
+  std::vector< CostImageType::Pointer > avgImsVec = 
 	ComputeMeanImages( labelImage, medFiltImages, numThreads );
 
   try

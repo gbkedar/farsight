@@ -1,6 +1,8 @@
 import os, sys, glob, stat, getopt, platform, subprocess, multiprocessing
 '''import Tkinter, Tkconstants, tkFileDialog
 
+brightFieldStr = '_C0.'
+
 class TkFileDialog(Tkinter.Frame):
   def __init__(self, root):
 
@@ -41,6 +43,8 @@ class TkFileDialog(Tkinter.Frame):
     for filename in files:
 	self.WriteNrrdTilesFromCziNShadeCorrect(filename)'''
 
+brightFieldStr = '_C0.'
+
 class PassFileNamesFromCLInsteadOfTk():
   def __init__(self, files):
     pform = platform.system()
@@ -51,15 +55,25 @@ class PassFileNamesFromCLInsteadOfTk():
     else:
       self.execPref = './'
     numCores = multiprocessing.cpu_count()
-    if numCores>30:
-      numCores = 30
+    if numCores>20:
+      numCores = 20
     self.numCoresToUse = str(int( round(numCores*0.9,0) ));
     skip = 1							#No gui code
     for filename in files:					#
       if skip:							#
         skip = 0						#
       else:							#
-        self.WriteNrrdTilesFromCziNShadeCorrect(filename)	#
+        self.stdstrring = ''
+        self.stdsterr   = ''
+        self.WriteNrrdTilesFromCziNShadeCorrect(filename)
+        logfile = os.path.splitext(filename)[0]+'.log'
+        errfile = os.path.splitext(filename)[0]+'.err'
+        f1 = open( logfile, 'a' )
+        f1.write( self.stdstrring )
+        f1.close()
+        f2 = open( errfile, 'a' )
+        f2.write( self.stdsterr )
+        f2.close()
 
   def register( self ):
     #files = self.askopenfilename()
@@ -77,7 +91,7 @@ class PassFileNamesFromCLInsteadOfTk():
     #Get Metadata
     self.RunBioformatsMetaReader(filename)
     #Nrrd files before conversion
-    searchStr = os.path.dirname(filename)+'/*.nrrd'
+    searchStr = os.path.splitext(filename)[0] + '*.nrrd'
     filesThatExistPre = glob.glob(searchStr)
     #Write Nrrd files
     nrrdConverter = self.execPref+'CziToNrrd'+self.execExt
@@ -88,19 +102,19 @@ class PassFileNamesFromCLInsteadOfTk():
     dicomConverter = self.execPref+'NrrdToDicom'+self.execExt
     filesThatExistPost = glob.glob(searchStr)
     for nrrdFile in filesThatExistPost:
-      noSkip = 1
-      if any(nrrdFile in nrrdFileNoConvert for nrrdFileNoConvert in filesThatExistPre):
-        noSkip = 0
-      if noSkip:
-        if nrrdFile.find(brightFieldStr)!=-1:
-          args = [ IlluminationEx, nrrdFile, self.numCoresToUse, '1' ]
-        else:
-          args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
-#        self.RunExec( args, nrrdFile )
-        nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
+      if nrrdFile.find(brightFieldStr)!=-1:
+        args = [ IlluminationEx, nrrdFile, self.numCoresToUse, '1' ]
+      else:
+        args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
+      self.RunExec( args, nrrdFile )
+      nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
+      if os.path.exists(nrrdIllFile):
         args = [ dicomConverter, nrrdIllFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
-#        self.RunExec( args, nrrdIllFile )
-	print nrrdFile, nrrdIllFile
+        self.RunExec( args, nrrdIllFile )
+        if os.path.exists(os.path.splitext(nrrdIllFile)[0]+'_stitched.tif')==0:
+          self.stdsterr += 'Stitching failed on file: '+nrrdIllFile+'\n'
+      else:
+        self.stdsterr   += 'Illumination correction failed on file: '+nrrdFile+'\n'
 
   def RunBioformatsMetaReader( self, filename ):
     xmlFilename = os.path.splitext(filename)[0]+'.xml'
@@ -110,20 +124,24 @@ class PassFileNamesFromCLInsteadOfTk():
            '-nopix', '-omexml-only', filename ]
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
+    self.stdstrring += stdout
+    self.stdsterr   += stderr
     f = open( xmlFilename, 'w' )
     f.write(stdout)
     f.close()
-    f0 = open( errFilename, 'a' )
+    '''f0 = open( errFilename, 'a' )
     f0.write( stderr )
-    f0.close()
+    f0.close()'''
 
   def RunExec( self, args, filename ):
     errFilename = os.path.splitext(filename)[0]+'.errlog'
     logFilename = os.path.splitext(filename)[0]+'.log'
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
-    print stdout, stderr
-'''    f1 = open( errFilename, 'a' )
+    self.stdstrring += stdout
+    self.stdsterr   += stderr
+    '''print stdout, stderr
+    f1 = open( errFilename, 'a' )
     f1.write( stderr )
     f1.close()
     f2 = open( logFilename, 'a' )
@@ -132,7 +150,7 @@ class PassFileNamesFromCLInsteadOfTk():
 
 if __name__=='__main__':
   PassFileNamesFromCLInsteadOfTk(sys.argv)	#No gui code
-'''  root = Tkinter.Tk()
+  '''root = Tkinter.Tk()
   TkFileDialog(root).pack()
   root.mainloop()'''
 
