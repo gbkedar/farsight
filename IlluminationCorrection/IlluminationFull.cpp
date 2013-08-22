@@ -16,8 +16,8 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-#define DEBUG_THREE_LEVEL_LABELING
-#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_THREE_LEVEL_LABELING
+//#define DEBUG_MEAN_PROJECTIONS
 #define DEBUG_CORRECTION_SURFACES
 
 #include <vector>
@@ -52,6 +52,7 @@
 #include "itkScalarImageToHistogramGenerator.h"
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
+#include "itkImageDuplicator.h"
 
 #include <mlpack/core.hpp>
 #include <mlpack/methods/lars/lars.hpp>
@@ -1623,11 +1624,10 @@ int main(int argc, char *argv[])
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
   US3ImageType::Pointer inputImage = ReadITKImage<US3ImageType>( inputImageName );
-  US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
 
-  itk::IndexValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
-  itk::IndexValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
-  itk::IndexValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
+  itk::SizeValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
+  itk::SizeValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
+  itk::SizeValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
 
   std::cout<<"Number of slices:"<<numSlices<<std::endl;
 
@@ -1643,6 +1643,21 @@ int main(int argc, char *argv[])
   resacledImages.resize( numSlices );
 #endif //DEBUG_RESCALING_N_COST_EST
 
+//{ //Scoping for Noise thresholded image
+  typedef itk::ImageDuplicator<US3ImageType> DuplicatorType;
+  DuplicatorType::Pointer duplicator = DuplicatorType::New();
+  duplicator->SetInputImage( inputImage );
+  try
+  {
+    duplicator->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught median filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  US3ImageType::Pointer clonedImage = duplicator->GetModifiableOutput();
+  US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -1656,7 +1671,7 @@ int main(int argc, char *argv[])
   for( itk::IndexValueType i=0; i<numSlices; ++i )
   {
     US2ImageType::Pointer currentSlice;
-    GetTile( currentSlice, inputImage, (unsigned)i );
+    GetTile( currentSlice, inputImage, (itk::SizeValueType)i );
     //Median filter for each slice to remove thermal noise
     MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
@@ -1716,6 +1731,7 @@ int main(int argc, char *argv[])
 #else
   				autoFlourCostsBG, flourCostsBG, valsPerBin );
 #endif //DEBUG_RESCALING_N_COST_EST
+//} //End scoping for noise thresholded image
 
 #ifdef DEBUG_RESCALING_N_COST_EST
   std::string OutFiles1 = nameTemplate + "costImageF.nrrd";
@@ -1733,9 +1749,9 @@ int main(int argc, char *argv[])
   //Copy into 3d image
   UC3ImageType::Pointer labelImage = UC3ImageType::New();
   UC3ImageType::SizeType  size;
-  size[0] = inputImage->GetLargestPossibleRegion().GetSize()[0];
-  size[1] = inputImage->GetLargestPossibleRegion().GetSize()[1];
-  size[2] = inputImage->GetLargestPossibleRegion().GetSize()[2];
+  size[0] = numRow;
+  size[1] = numCol;
+  size[2] = numSlices;
   CreateDefaultCoordsNAllocateSpace<UC3ImageType>( labelImage, size );
 
   std::cout<<"Done! Starting Cuts\n"<<std::flush;
@@ -1834,7 +1850,7 @@ int main(int argc, char *argv[])
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
-  CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, inputImage, labelImage, 
+  CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, clonedImage, labelImage, 
 		flAvgIm, AFAvgIm, BGAvgIm, numThreads, useSingleLev );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
@@ -1842,7 +1858,7 @@ int main(int argc, char *argv[])
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
 
-  WriteITKImage<US3ImageType>( inputImage, correctedImageName );
+  WriteITKImage<US3ImageType>( clonedImage, correctedImageName );
 
   exit( EXIT_SUCCESS );
 }

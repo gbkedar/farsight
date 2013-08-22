@@ -51,6 +51,8 @@ class PassFileNamesFromCLInsteadOfTk():
     else:
       self.execPref = './'
     numCores = multiprocessing.cpu_count()
+    if numCores>30:
+      numCores = 30
     self.numCoresToUse = str(int( round(numCores*0.9,0) ));
     skip = 1							#No gui code
     for filename in files:					#
@@ -90,9 +92,12 @@ class PassFileNamesFromCLInsteadOfTk():
       if any(nrrdFile in nrrdFileNoConvert for nrrdFileNoConvert in filesThatExistPre):
         noSkip = 0
       if noSkip:
-        args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
+        if nrrdFile.find(brightFieldStr)!=-1:
+          args = [ IlluminationEx, nrrdFile, self.numCoresToUse, '1' ]
+        else:
+          args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
 #        self.RunExec( args, nrrdFile )
-	nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
+        nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
         args = [ dicomConverter, nrrdIllFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
 #        self.RunExec( args, nrrdIllFile )
 	print nrrdFile, nrrdIllFile
@@ -117,12 +122,13 @@ class PassFileNamesFromCLInsteadOfTk():
     logFilename = os.path.splitext(filename)[0]+'.log'
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
-    f1 = open( errFilename, 'a' )
+    print stdout, stderr
+'''    f1 = open( errFilename, 'a' )
     f1.write( stderr )
     f1.close()
     f2 = open( logFilename, 'a' )
     f2.write( stdout )
-    f2.close()
+    f2.close()'''
 
 if __name__=='__main__':
   PassFileNamesFromCLInsteadOfTk(sys.argv)	#No gui code
