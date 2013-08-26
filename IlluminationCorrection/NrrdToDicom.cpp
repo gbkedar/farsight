@@ -8,6 +8,10 @@
 #include "itkImageFileWriter.h"
 #include "itkPasteImageFilter.h"
 #include "itkExtractImageFilter.h"
+#include "itkDiscreteGaussianImageFilter.h"
+
+#define SM_SIGMA 5.0
+#define SM_WIN_SZ 10
 
 typedef itk::IndexValueType IIVT;
 typedef itk::SizeValueType  ISVT;
@@ -315,6 +319,122 @@ US2ImageType::Pointer PasteNonOverLappingSections( US2ImageType::Pointer outputI
   return outputImage;
 }
 
+US2ImageType::Pointer GetSeamStrip( US2ImageType::Pointer outputImage, IIVT position, int direction )
+{
+  typedef itk::ExtractImageFilter< US2ImageType, US2ImageType > DataExtractType;
+  DataExtractType::Pointer deFilter = DataExtractType::New();
+  US2ImageType::RegionType dRegion  = outputImage->GetLargestPossibleRegion();
+  IIVT startPos = position-(SM_WIN_SZ/2);
+  if( direction )
+  {
+    dRegion.SetSize (1, SM_WIN_SZ);
+    dRegion.SetIndex(1, startPos);
+  }
+  else
+  {
+    dRegion.SetSize (0, SM_WIN_SZ);
+    dRegion.SetIndex(0, startPos);
+  }
+  deFilter->SetExtractionRegion(dRegion);
+  deFilter->SetInput( outputImage );
+  try
+  {
+    deFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  US2ImageType::Pointer currentStrip = deFilter->GetOutput();
+  return currentStrip;
+}
+
+
+US2ImageType::Pointer SmoothSeamStrip( US2ImageType::Pointer seamStrip )
+{
+  typedef itk::DiscreteGaussianImageFilter< US2ImageType, US2ImageType > GaussianFilterType;
+  GaussianFilterType::Pointer gaussianFilter = GaussianFilterType::New();
+  gaussianFilter->SetInput( seamStrip );
+  gaussianFilter->SetVariance( SM_SIGMA );
+  try
+  {
+    gaussianFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  US2ImageType::Pointer smoothedImage = gaussianFilter->GetOutput();
+  return smoothedImage;
+}
+
+US2ImageType::Pointer PasteSeamStrip( US2ImageType::Pointer seamStrip, US2ImageType::Pointer outputImage,
+		IIVT position, int direction )
+{
+  typedef itk::PasteImageFilter <US2ImageType, US2ImageType> PasteImageFilterType;
+  PasteImageFilterType::Pointer pasteFilter = PasteImageFilterType::New();
+  pasteFilter->SetSourceImage( seamStrip );
+  pasteFilter->SetSourceRegion( seamStrip->GetLargestPossibleRegion() );
+  pasteFilter->SetDestinationImage( outputImage );
+  US2ImageType::IndexType destIndex; destIndex[0]=0; destIndex[1]=0;
+  IIVT startPos = position-(SM_WIN_SZ/2);
+  if( direction )
+    destIndex[1] = startPos;
+  else
+    destIndex[0] = startPos;
+  pasteFilter->SetDestinationIndex( destIndex );
+  try
+  {
+    pasteFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  outputImage = pasteFilter->GetOutput();
+  return outputImage;
+}
+
+US2ImageType::Pointer SmoothSeams( US2ImageType::Pointer outputImage, std::vector< TilePositionStructType > &positionVec,
+		IIVT xMin, IIVT yMin, IIVT xMax, IIVT yMax, int numThreads, ISVT tileSizeX, ISVT tileSizeY )
+{
+  std::vector< IIVT > xSeams, ySeams;
+  //Get X seams from the first row
+  ISVT count = 1;
+  while( positionVec.at(0).Y==positionVec.at(count).Y )
+  {
+    xSeams.push_back( positionVec.at(count-1).X+tileSizeX-xMin );
+    ++count;
+  }
+  //Get Y seams
+  for( count = 1; count<positionVec.size(); ++count )
+    if( positionVec.at(count).Y!=positionVec.at(count-1).Y )
+      ySeams.push_back( positionVec.at(count).Y+tileSizeY-yMin );
+
+  for( count=0; count<xSeams.size(); ++count )
+  {
+    US2ImageType::Pointer seamStrip = GetSeamStrip( outputImage, xSeams.at(count), 0 );
+    US2ImageType::Pointer smoothedSeamStrip = SmoothSeamStrip( seamStrip );
+    outputImage = PasteSeamStrip( smoothedSeamStrip, outputImage, xSeams.at(count), 0 );
+  }
+  for( count=0; count<ySeams.size(); ++count )
+  {
+    US2ImageType::Pointer seamStrip = GetSeamStrip( outputImage, ySeams.at(count), 1 );
+    US2ImageType::Pointer smoothedSeamStrip = SmoothSeamStrip( seamStrip );
+    outputImage = PasteSeamStrip( smoothedSeamStrip, outputImage, ySeams.at(count), 1 );
+  }
+  return outputImage;
+}
+
+void BlendOverlaps( US2ImageType::Pointer outputImage, std::vector< TilePositionStructType > &positionVec,
+		IIVT xMin, IIVT yMin, IIVT xMax, IIVT yMax, int numThreads, ISVT tileSizeX, ISVT tileSizeY )
+{
+  return;
+}
+
 int main( int argc, char *argv[] )
 {
   if( argc < 3 )
@@ -339,7 +459,6 @@ int main( int argc, char *argv[] )
     return EXIT_FAILURE;
     std::cout<<"Couldn't find xml file\n";
   }
-
 
   double pixelPitch = FindPixelPitch( doc );
   std::cout<<"Pitch found "<< pixelPitch << std::endl << std::flush;
@@ -387,6 +506,11 @@ int main( int argc, char *argv[] )
   std::sort( positionVec.begin(), positionVec.end() );
 
   outputImage = PasteNonOverLappingSections( outputImage, inputImage, overlapX, overlapY, positionVec, xMin, yMin, xMax, yMax, numThreads );
+
+  if( overlapX<3 || overlapY<3 )
+     outputImage = SmoothSeams( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
+  else
+     BlendOverlaps( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
 
   WriteITKImage<US2ImageType>( outputImage, nameTemplate ); 
 

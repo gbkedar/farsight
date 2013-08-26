@@ -92,7 +92,6 @@ class PassFileNamesFromCLInsteadOfTk():
     self.RunBioformatsMetaReader(filename)
     #Nrrd files before conversion
     searchStr = os.path.splitext(filename)[0] + '*.nrrd'
-    filesThatExistPre = glob.glob(searchStr)
     #Write Nrrd files
     nrrdConverter = self.execPref+'CziToNrrd'+self.execExt
     args = [ nrrdConverter, filename, self.numCoresToUse ]
@@ -109,8 +108,14 @@ class PassFileNamesFromCLInsteadOfTk():
       self.RunExec( args, nrrdFile )
       nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
       if os.path.exists(nrrdIllFile):
+        os.remove( nrrdFile )
+        os.rename( nrrdIllFile, nrrdFile )
+        self.RunExec( args, nrrdFile )
+	os.remove( nrrdFile )
+      if os.path.exists(nrrdIllFile):
         args = [ dicomConverter, nrrdIllFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
         self.RunExec( args, nrrdIllFile )
+        os.remove( nrrdIllFile )
         if os.path.exists(os.path.splitext(nrrdIllFile)[0]+'_stitched.tif')==0:
           self.stdsterr += 'Stitching failed on file: '+nrrdIllFile+'\n'
       else:
@@ -124,7 +129,6 @@ class PassFileNamesFromCLInsteadOfTk():
            '-nopix', '-omexml-only', filename ]
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
-    self.stdstrring += stdout
     self.stdsterr   += stderr
     f = open( xmlFilename, 'w' )
     f.write(stdout)

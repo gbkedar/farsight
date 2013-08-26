@@ -1510,6 +1510,11 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, false );// Since BG is kinda noisy
   //BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
   //double BGMinImage = AFMinImage;
+  double AvgRatio = (flMaxImage-flMinImage+AFMaxImage-AFMinImage+BGMaxImage-BGMinImage)/3.0;
+  if( useSingleLev )
+    AvgRatio = BGMaxImage-BGMinImage;
+  else
+    AvgRatio = (flMaxImage-flMinImage+AFMaxImage-AFMinImage+BGMaxImage-BGMinImage)/3.0;
 
   std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
 
@@ -1526,12 +1531,13 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     if( BGMinSurface>IndexVector.at(i).BGVals ) BGMinSurface=IndexVector.at(i).BGVals;
     if( BGMaxSurface<IndexVector.at(i).BGVals ) BGMaxSurface=IndexVector.at(i).BGVals;
   }
-  double flRatio = std::abs( (flMaxImage-flMinImage)/(flMaxSurface-flMinSurface) );
-  double AFRatio = std::abs( (AFMaxImage-AFMinImage)/(AFMaxSurface-AFMinSurface) );
-  double BGRatio = std::abs( (BGMaxImage-BGMinImage)/(BGMaxSurface-BGMinSurface) );
+  double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
+  double AFRatio = std::abs( AvgRatio/(AFMaxSurface-AFMinSurface) );//(AFMaxImage-AFMinImage)/
+  double BGRatio = std::abs( AvgRatio/(BGMaxSurface-BGMinSurface) );//(BGMaxImage-BGMinImage)/
   std::cout<<"Fl: "<<flRatio<<" "<<(flMaxImage-flMinImage)
 	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
-	<<"\tBG: "<<BGRatio<<" Im:"<<BGMaxImage<<" "<<BGMinImage<<" Surf:"<<BGMaxSurface<<" "<<BGMinSurface<<std::endl;
+	<<"\tBG-"<<BGRatio<<" Im:"<<BGMaxImage<<", "<<BGMinImage<<" Surf:"<<BGMaxSurface<<", "<<BGMinSurface
+	<<"\nAVG Rat: "<<AvgRatio<<std::endl;
   CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostImageType::Pointer AFSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
