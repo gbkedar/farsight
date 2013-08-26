@@ -1443,12 +1443,12 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
   double returnValue=0;
   if( channel==0 && flagMinMax )
   {
-    std::cout<<"Sorting FG\n";
+    std::cout<<"Sorting FG. ";
     std::sort( IndexVector.begin(), IndexVector.end(), flMax );
   }
   if( channel==1 && flagMinMax )
   {
-    std::cout<<"Sorting AF\n";
+    std::cout<<"Sorting AF. ";
     std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
   }
   if( channel==2 && flagMinMax )
@@ -1459,28 +1459,83 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
   CostIterType costIter( currentAvgIm, currentAvgIm->GetLargestPossibleRegion() );
   itk::SizeValueType count=MinMax;
   if( flagMinMax )
+  {
     for( itk::SizeValueType i = 0; i<MinMax; ++i )
     {
       CostImageType::IndexType index;
       index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
       costIter.SetIndex( index );
       if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-	returnValue += log(costIter.Get());
+      {
+	if( costIter.Get() )
+	{
+	  returnValue += log(costIter.Get());
+	}
+      }
       else
+      {
         --count;
+      }
     }
+    //If there isn't enough sampling continue
+    if( count<(MinMax/2) )
+    {
+      itk::SizeValueType i=MinMax;
+      while( i<IndexVector.size() &&  (count<(MinMax/2)) )
+      {
+	CostImageType::IndexType index;
+	index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
+	costIter.SetIndex( index );
+	if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
+	{
+	  if( costIter.Get() )
+	    returnValue += log(costIter.Get());
+	  ++count;
+	}
+	++i;
+      }
+    }
+  }
   else
+  {
     for( itk::SizeValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
     {
       CostImageType::IndexType index;
       index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
       costIter.SetIndex( index );
       if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-	returnValue += log(costIter.Get());
+      {
+	if( costIter.Get() )
+	{
+	  returnValue += log(costIter.Get());
+	}
+      }
       else
+      {
         --count;
+      }
     }
-  returnValue /= ((double)count);
+    //If there isn't enough sampling continue
+    if( count<(MinMax/2) )
+    {
+      itk::SizeValueType i=IndexVector.size()-MinMax-1;
+      while( i>=0 &&  (count<(MinMax/2)) )
+      {
+	CostImageType::IndexType index;
+	index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
+	costIter.SetIndex( index );
+	if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
+	{
+	  if( costIter.Get() )
+	    returnValue += log(costIter.Get());
+	  ++count;
+	}
+	--i;
+      }
+    }
+  }
+  if( returnValue )
+    returnValue /= ((double)count);
   return returnValue;
 }
 
