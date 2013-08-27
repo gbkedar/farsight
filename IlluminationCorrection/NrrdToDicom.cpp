@@ -10,7 +10,7 @@
 #include "itkExtractImageFilter.h"
 #include "itkDiscreteGaussianImageFilter.h"
 
-#define SM_SIGMA 5.0
+#define SM_SIGMA 1.5
 #define SM_WIN_SZ 10
 
 typedef itk::IndexValueType IIVT;
@@ -311,7 +311,7 @@ US2ImageType::Pointer PasteNonOverLappingSections( US2ImageType::Pointer outputI
     }
     catch( itk::ExceptionObject & excep )
     {
-      std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+      std::cerr << "Exception caught in paste non-overlapping piece filter!" << excep << std::endl;
       exit (EXIT_FAILURE);
     }
     outputImage = pasteFilter->GetOutput();
@@ -343,7 +343,7 @@ US2ImageType::Pointer GetSeamStrip( US2ImageType::Pointer outputImage, IIVT posi
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    std::cerr << "Exception caught in seam strip extraction filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   US2ImageType::Pointer currentStrip = deFilter->GetOutput();
@@ -363,7 +363,7 @@ US2ImageType::Pointer SmoothSeamStrip( US2ImageType::Pointer seamStrip )
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    std::cerr << "Exception caught in gaussian filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   US2ImageType::Pointer smoothedImage = gaussianFilter->GetOutput();
@@ -391,7 +391,7 @@ US2ImageType::Pointer PasteSeamStrip( US2ImageType::Pointer seamStrip, US2ImageT
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught in slice extraction filter!" << excep << std::endl;
+    std::cerr << "Exception caught in paste seam strip after smoothing filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   outputImage = pasteFilter->GetOutput();
@@ -413,6 +413,9 @@ US2ImageType::Pointer SmoothSeams( US2ImageType::Pointer outputImage, std::vecto
   for( count = 1; count<positionVec.size(); ++count )
     if( positionVec.at(count).Y!=positionVec.at(count-1).Y )
       ySeams.push_back( positionVec.at(count).Y+tileSizeY-yMin );
+
+  xSeams.pop_back();
+  ySeams.pop_back();
 
   for( count=0; count<xSeams.size(); ++count )
   {
