@@ -1,4 +1,4 @@
-import os, sys, glob, stat, getopt, platform, subprocess, multiprocessing
+import os, sys, glob, stat, getopt, platform, subprocess, multiprocessing, fnmatch
 '''import Tkinter, Tkconstants, tkFileDialog
 
 brightFieldStr = '_C0.'
@@ -44,6 +44,8 @@ class TkFileDialog(Tkinter.Frame):
 	self.WriteNrrdTilesFromCziNShadeCorrect(filename)'''
 
 brightFieldStr = '_C0.'
+cziStr = '.czi'
+cziFilterStr ='*.czi'
 
 class PassFileNamesFromCLInsteadOfTk():
   def __init__(self, files):
@@ -65,15 +67,29 @@ class PassFileNamesFromCLInsteadOfTk():
       else:							#
         self.stdstrring = ''
         self.stdsterr   = ''
-        self.WriteNrrdTilesFromCziNShadeCorrect(filename)
-        logfile = os.path.splitext(filename)[0]+'.log'
-        errfile = os.path.splitext(filename)[0]+'.err'
-        f1 = open( logfile, 'a' )
-        f1.write( self.stdstrring )
-        f1.close()
-        f2 = open( errfile, 'a' )
-        f2.write( self.stdsterr )
-        f2.close()
+        if filename.find(cziStr)!=-1:
+          self.WriteNrrdTilesFromCziNShadeCorrect(filename)
+          logfile = os.path.splitext(filename)[0]+'.log'
+          errfile = os.path.splitext(filename)[0]+'.err'
+          f1 = open( logfile, 'a' )
+          f1.write( self.stdstrring )
+          f1.close()
+          f2 = open( errfile, 'a' )
+          f2.write( self.stdsterr )
+          f2.close()
+        else:
+          for root, dirs, czifiles in os.walk(filename):
+            for filenameczi in fnmatch.filter(czifiles, cziFilterStr):
+	      prcFilename = os.path.join(root,filenameczi)
+              self.WriteNrrdTilesFromCziNShadeCorrect(prcFilename)
+              logfile = os.path.splitext(prcFilename)[0]+'.log'
+              errfile = os.path.splitext(prcFilename)[0]+'.err'
+              f1 = open( logfile, 'a' )
+              f1.write( self.stdstrring )
+              f1.close()
+              f2 = open( errfile, 'a' )
+              f2.write( self.stdsterr )
+              f2.close()
 
   def register( self ):
     #files = self.askopenfilename()
