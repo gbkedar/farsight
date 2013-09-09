@@ -1518,7 +1518,7 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
     //If there isn't enough sampling continue
     if( count<(MinMax/2) )
     {
-      itk::SizeValueType i=IndexVector.size()-MinMax-1;
+      itk::IndexValueType i=IndexVector.size()-MinMax-1;
       while( i>=0 &&  (count<(MinMax/2)) )
       {
 	CostImageType::IndexType index;
