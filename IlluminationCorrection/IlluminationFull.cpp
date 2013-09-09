@@ -1457,10 +1457,10 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
     std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
   }
   CostIterType costIter( currentAvgIm, currentAvgIm->GetLargestPossibleRegion() );
-  itk::SizeValueType count=MinMax;
+  itk::IndexValueType count=MinMax;
   if( flagMinMax )
   {
-    for( itk::SizeValueType i = 0; i<MinMax; ++i )
+    for( itk::IndexValueType i = 0; i<MinMax; ++i )
     {
       CostImageType::IndexType index;
       index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
@@ -1480,7 +1480,7 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
     //If there isn't enough sampling continue
     if( count<(MinMax/2) )
     {
-      itk::SizeValueType i=MinMax;
+      itk::IndexValueType i=MinMax;
       while( i<IndexVector.size() &&  (count<(MinMax/2)) )
       {
 	CostImageType::IndexType index;
@@ -1498,7 +1498,7 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
   }
   else
   {
-    for( itk::SizeValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
+    for( itk::IndexValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
     {
       CostImageType::IndexType index;
       index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
