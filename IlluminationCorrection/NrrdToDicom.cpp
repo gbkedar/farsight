@@ -9,6 +9,7 @@
 #include "itkPasteImageFilter.h"
 #include "itkExtractImageFilter.h"
 #include "itkDiscreteGaussianImageFilter.h"
+#include "itkSCIFIOImageIO.h"
 
 #define SM_SIGMA 1.5
 #define SM_WIN_SZ 10
@@ -49,6 +50,8 @@ template<typename InputImageType> itk::SmartPointer<InputImageType>
 {
   typedef typename itk::ImageFileReader< InputImageType > ReaderType;
   typename ReaderType::Pointer reader = ReaderType::New();
+  itk::SCIFIOImageIO::Pointer io = itk::SCIFIOImageIO::New();
+  reader->SetImageIO( io );
   reader->SetFileName( inputName.c_str() );
   try
   {

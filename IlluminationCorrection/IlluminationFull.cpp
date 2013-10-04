@@ -19,6 +19,7 @@
 //#define DEBUG_THREE_LEVEL_LABELING
 //#define DEBUG_MEAN_PROJECTIONS
 //#define DEBUG_CORRECTION_SURFACES
+#define NO_GRAPH_CUTS
 
 #include <vector>
 #include <algorithm>
@@ -53,6 +54,7 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 #include "itkImageDuplicator.h"
+#include "itkSCIFIOImageIO.h"
 
 #include <mlpack/core.hpp>
 #include <mlpack/methods/lars/lars.hpp>
@@ -111,6 +113,8 @@ template<typename InputImageType> typename InputImageType::Pointer
 {
   typedef typename itk::ImageFileReader< InputImageType > ReaderType;
   typename ReaderType::Pointer reader = ReaderType::New();
+  itk::SCIFIOImageIO::Pointer io = itk::SCIFIOImageIO::New();
+  reader->SetImageIO( io );
   reader->SetFileName( inputName.c_str() );
   try
   {
@@ -812,15 +816,20 @@ void ComputeCut( itk::IndexValueType slice,
   itk::SizeValueType numEdges = 3*numCol*numRow //Down, right and diagonal
   				+ 1 - 2*numCol	//No Down At Bottom
 				- 2*numRow;	//No Right At Edge
-
-  typedef Graph_B < double, double, double > GraphType;
-  GraphType *graph = new GraphType( numNodes, numEdges );
+  //Declare some common iterators
   US2IterType medianIter( medFiltImages.at(slice),
   			  medFiltImages.at(slice)->GetLargestPossibleRegion() );
   CostIterType AFCostIter( flourCosts.at(slice), 
   			   flourCosts.at(slice)->GetLargestPossibleRegion() );
   CostIterType AFBGCostIter( flourCostsBG.at(slice), 
   			     flourCostsBG.at(slice)->GetLargestPossibleRegion() );
+  UC3ImageType::IndexType start;start[0] = 0;	  start[1] = 0;	    start[2] = slice;
+  UC3ImageType::SizeType size;   size[0] = numRow; size[1] = numCol; size[2] = 1;
+  UC3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( start );
+  UC3IterType outputIter( outputImage, region );
+#ifndef NO_GRAPH_CUTS
+  typedef Graph_B < double, double, double > GraphType;
+  GraphType *graph = new GraphType( numNodes, numEdges );
   //Iterate and add terminal weights
   for( itk::SizeValueType i=0; i<numRow; ++i )
   {
@@ -862,10 +871,6 @@ void ComputeCut( itk::IndexValueType slice,
   graph->maxflow();
 
   //Iterate and write out the pixels
-  UC3ImageType::IndexType start;start[0] = 0;	  start[1] = 0;	    start[2] = slice;
-  UC3ImageType::SizeType size;   size[0] = numRow; size[1] = numCol; size[2] = 1;
-  UC3ImageType::RegionType region; region.SetSize( size ); region.SetIndex( start );
-  UC3IterType outputIter( outputImage, region );
   for( itk::SizeValueType i=0; i<numRow-1; ++i )
   {
     for( itk::SizeValueType j=0; j<numCol-1; ++j )
@@ -878,6 +883,12 @@ void ComputeCut( itk::IndexValueType slice,
     }
   }
   delete graph;
+#else //NO_GRAPH_CUTS
+  AFCostIter.GoToBegin(); AFBGCostIter.GoToBegin(); outputIter.GoToBegin();
+  for( ; !AFCostIter.IsAtEnd(); ++AFCostIter, ++AFBGCostIter, ++outputIter )
+    if( AFBGCostIter.Get()>AFCostIter.Get() )
+      outputIter.Set( foregroundValue );
+#endif //NO_GRAPH_CUTS
 }
 
 std::vector< CostImageType::Pointer >
@@ -1678,11 +1689,11 @@ int main(int argc, char *argv[])
     useSingleLev = atoi( argv[3] );
     std::cout<<"Single level flag set to "<<useSingleLev<<std::endl;
   }
+
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
   US3ImageType::Pointer inputImage = ReadITKImage<US3ImageType>( inputImageName );
-
   itk::SizeValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
   itk::SizeValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
@@ -1867,10 +1878,10 @@ int main(int argc, char *argv[])
 //  std::string flAvgName = nameTemplate + "flAvg.tif";
 //  std::string AFAvgName = nameTemplate + "AFAvg.tif";
 //  std::string BGAvgName = nameTemplate + "BGAvg.tif";
-//  UC3ImageType::Pointer labelImage = ReadITKImage<UC3ImageType>( labelImageName );
-//  CostImageType::Pointer flAvgIm = ReadITKImage<CostImageType>( flAvgName );
-//  CostImageType::Pointer AFAvgIm = ReadITKImage<CostImageType>( AFAvgName );
-//  CostImageType::Pointer BGAvgIm = ReadITKImage<CostImageType>( BGAvgName );
+//  UC3ImageType::Pointer labelImage = //ReadITKImage<UC3ImageType>( labelImageName );
+//  CostImageType::Pointer flAvgIm = //ReadITKImage<CostImageType>( flAvgName );
+//  CostImageType::Pointer AFAvgIm = //ReadITKImage<CostImageType>( AFAvgName );
+//  CostImageType::Pointer BGAvgIm = //ReadITKImage<CostImageType>( BGAvgName );
 //******************
   std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
 			BGPolyCoeffs(numCoeffs,0), normConstants(2*3*numCoeffs,0);
