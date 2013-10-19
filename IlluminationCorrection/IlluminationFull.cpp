@@ -893,7 +893,8 @@ void ComputeCut( itk::IndexValueType slice,
 
 std::vector< CostImageType::Pointer >
   ComputeMeanImages ( UC3ImageType::Pointer labelImage,
-	std::vector< US2ImageType::Pointer > &medFiltIms, int numThreads )
+	std::vector< US2ImageType::Pointer > &medFiltIms, int numThreads,
+	int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< CostImageType3d > CostIterType3d;
@@ -1126,7 +1127,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 
 
 typedef std::vector<double> DblVec;
-void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec &ImVals,
+double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec &ImVals,
 	DblVec &normConstants, unsigned normIndex //Idex to store the normalization consts
 #if ORDER>2
 		, DblVec X3, DblVec X2Y, DblVec XY2, DblVec Y3
@@ -1141,7 +1142,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   itk::SizeValueType countFail=0;
   //Compute valid indices and means & 2-norms
   double XMean=0, YMean=0, X2Mean=0, Y2Mean=0, XYMean=0, ImValsMean=0,
-	XNorm=0, YNorm=0, X2Norm=0, Y2Norm=0, XYNorm=0, ImValsNorm=0
+	XNorm=0, YNorm=0, X2Norm=0, Y2Norm=0, XYNorm=0//, ImValsNorm=0
 #if ORDER>2
 	, X3Mean=0, X2YMean=0, XY2Mean=0, Y3Mean=0
 	, X3Norm=0, X2YNorm=0, XY2Norm=0, Y3Norm=0
@@ -1183,7 +1184,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
 	ImVals.at(i)-=ImValsMean;
 	XNorm+=(X.at(i)*X.at(i)); YNorm+=(Y.at(i)*Y.at(i)); X2Norm+=(X2.at(i)*X2.at(i));
 	Y2Norm+=(Y2.at(i)*Y2.at(i)); XYNorm+=(XY.at(i)*XY.at(i));
-	ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
+	//ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
 #if ORDER>2
 	X3.at(i)-=X3Mean; X2Y.at(i)-=X2YMean; XY2.at(i)-=XY2Mean; Y3.at(i)-=Y3Mean;
 	X3Norm+=(X3.at(i)*X3.at(i)); X2YNorm+=(X2Y.at(i)*X2Y.at(i)); XY2Norm+=(XY2.at(i)*XY2.at(i));
@@ -1198,7 +1199,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   }
 
   XNorm=sqrt(XNorm); YNorm=sqrt(YNorm); X2Norm=sqrt(X2Norm); Y2Norm=sqrt(Y2Norm); XYNorm=sqrt(XYNorm);
-  ImValsNorm=sqrt(ImValsNorm);
+  //ImValsNorm=sqrt(ImValsNorm);
 #if ORDER>2
   X3Norm=sqrt(X3Norm); X2YNorm=sqrt(X2YNorm); XY2Norm=sqrt(XY2Norm); Y3Norm=sqrt(Y3Norm);
 #endif
@@ -1238,7 +1239,7 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
     {
 	X.at(i)/=XNorm; Y.at(i)/=YNorm; X2.at(i)/=X2Norm; Y2.at(i)/=Y2Norm; XY.at(i)/=XYNorm;
 	matX(0,j)=X.at(i); matX(1,j)=Y.at(i); matX(2,j)=X2.at(i); matX(3,j)=Y2.at(i); matX(4,j)=XY.at(i);
-	ImVals.at(i)/=ImValsNorm;
+	//ImVals.at(i)/=ImValsNorm;
 	matY(j,0)=ImVals.at(i);
 #if ORDER>2
 	X3.at(i)/=X3Norm; X2Y.at(i)/=X2YNorm; XY2.at(i)/=XY2Norm; Y3.at(i)/=Y3Norm;
@@ -1254,13 +1255,14 @@ void  RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVec
   }
   double lambda1=0.1, lambda2=0.1;
   Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2 );
-  return;
+  return ImValsMean;
 }
 
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
   std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
-  std::vector<double> &normConstants, int numThreads, int useSingleLev )
+  std::vector<double> &normConstants, std::vector<double> &imMeans,
+  int numThreads, int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   std::vector<double>
@@ -1296,33 +1298,34 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
   }
   if( !useSingleLev )
 {
-  RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants, 0 //Idex to store the normalization consts
+  imMeans.at(0) = RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants,
+  				0 //Idex to store the normalization consts
 #if ORDER>2
-		, X3, X2Y, XY2, Y3
+				, X3, X2Y, XY2, Y3
 #endif
 #if ORDER>3
-		, X4, X3Y, X2Y2, XY3, Y4
+				, X4, X3Y, X2Y2, XY3, Y4
 #endif
 		, flPolyCoeffs, numThreads );
-  RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants, 2*numCoeffs
-  							  //Index to store the normalization consts
+  imMeans.at(1) = RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants,
+  				2*numCoeffs //Index to store the normalization consts
 #if ORDER>2
-		, X3, X2Y, XY2, Y3
+				, X3, X2Y, XY2, Y3
 #endif
 #if ORDER>3
-		, X4, X3Y, X2Y2, XY3, Y4
+				, X4, X3Y, X2Y2, XY3, Y4
 #endif
-		, AFPolyCoeffs, numThreads );
+				, AFPolyCoeffs, numThreads );
 }
-  RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants, 4*numCoeffs
-  							  //Idex to store the normalization consts
+  imMeans.at(2) = RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants,
+  				4*numCoeffs //Idex to store the normalization consts
 #if ORDER>2
-		, X3, X2Y, XY2, Y3
+				, X3, X2Y, XY2, Y3
 #endif
 #if ORDER>3
-		, X4, X3Y, X2Y2, XY3, Y4
+				, X4, X3Y, X2Y2, XY3, Y4
 #endif
-		, BGPolyCoeffs, numThreads );
+				, BGPolyCoeffs, numThreads );
   return;
 }
 
@@ -1333,7 +1336,7 @@ struct IndexStructType
 void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
 	std::vector< IndexStructType > &IndexVector, std::vector<double> &normConstants,
 	std::vector<double> &flPolyCoeffs, std::vector<double> &AFPolyCoeffs,
-	std::vector<double> &BGPolyCoeffs )
+	std::vector<double> &BGPolyCoeffs, std::vector<double> &imMeans )
 {
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
   US3ImageType::SizeType size;
@@ -1387,6 +1390,7 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
 +flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11))
 +flPolyCoeffs.at(12)*((XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12))
 +flPolyCoeffs.at(13)*((Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13))
++imMeans.at(0)
 #endif
 	;
     currentIndex.AFVals = AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs))
@@ -1407,6 +1411,7 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
 +AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11))
 +AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12))
 +AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13))
++imMeans.at(1)
 #endif
 	;
 currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*numCoeffs))
@@ -1427,9 +1432,9 @@ currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*num
 +BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11))
 +BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12))
 +BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13))
++imMeans.at(2)
 #endif
     ;
-//    currentIndex.FlVals = (currentIndex.AFVals+currentIndex.FlVals)/2;//Fl surface can be skewed by noise
     IndexVector.push_back( currentIndex );
   }
   return;
@@ -1554,8 +1559,8 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
-	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm, int numThreads,
-	int useSingleLev )
+	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm,
+	std::vector<double> &imMeans, int numThreads, int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > InputIterType;
@@ -1567,8 +1572,8 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   itk::SizeValueType numSlices = size[2];
   std::vector< IndexStructType > IndexVector;
   GetSurfaceForIndices( inputImage, IndexVector, normConstants, flPolyCoeffs, AFPolyCoeffs,
-  			BGPolyCoeffs );
-  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, true  );
+  			BGPolyCoeffs, imMeans );
+/*  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, true  );
   double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, false );
   double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, true  );
   double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, false );
@@ -1581,7 +1586,7 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     AvgRatio = BGMaxImage-BGMinImage;
   else
     AvgRatio = (flMaxImage-flMinImage+AFMaxImage-AFMinImage+BGMaxImage-BGMinImage)/3.0;
-
+*/
   std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
 
   //Rescale to between 0 and max-min for all three surfaces
@@ -1597,14 +1602,14 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     if( BGMinSurface>IndexVector.at(i).BGVals ) BGMinSurface=IndexVector.at(i).BGVals;
     if( BGMaxSurface<IndexVector.at(i).BGVals ) BGMaxSurface=IndexVector.at(i).BGVals;
   }
-  double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
+/*double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
   double AFRatio = std::abs( AvgRatio/(AFMaxSurface-AFMinSurface) );//(AFMaxImage-AFMinImage)/
   double BGRatio = std::abs( AvgRatio/(BGMaxSurface-BGMinSurface) );//(BGMaxImage-BGMinImage)/
   std::cout<<"Fl: "<<flRatio<<" "<<(flMaxImage-flMinImage)
 	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
 	<<"\tBG-"<<BGRatio<<" Im:"<<BGMaxImage<<", "<<BGMinImage<<" Surf:"<<BGMaxSurface<<", "<<BGMinSurface
 	<<"\nAVG Rat: "<<AvgRatio<<std::endl;
-  CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
+*/CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostImageType::Pointer AFSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostImageType::Pointer BGSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
@@ -1615,9 +1620,9 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
   {
     CostImageType::IndexType index; index[0] = IndexVector.at(i).Y; index[1] = IndexVector.at(i).X;
     flIter.SetIndex( index ); AFIter.SetIndex( index ); BGIter.SetIndex( index );
-    flIter.Set( (IndexVector.at(i).FlVals-flMinSurface)*flRatio );
-    AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface)*AFRatio );
-    BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface)*BGRatio );
+    flIter.Set( (IndexVector.at(i).FlVals-flMinSurface) );//*flRatio );
+    AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface) );//*AFRatio );
+    BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface) );//*BGRatio );
   }
 
 #ifdef DEBUG_CORRECTION_SURFACES
@@ -1857,7 +1862,7 @@ int main(int argc, char *argv[])
 
   std::cout<<"Computing mean Images\n"<<std::flush;
   std::vector< CostImageType::Pointer > avgImsVec = 
-	ComputeMeanImages( labelImage, medFiltImages, numThreads );
+	ComputeMeanImages( labelImage, medFiltImages, numThreads, useSingleLev );
 
   try
   {
@@ -1885,6 +1890,7 @@ int main(int argc, char *argv[])
 //******************
   std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
 			BGPolyCoeffs(numCoeffs,0), normConstants(2*3*numCoeffs,0);
+  std::vector<double> imMeans(3,0);
 
   //Make pointers for the flour, autoflour n bg avg images
   CostImageType::Pointer flAvgIm, AFAvgIm, BGAvgIm;
@@ -1905,13 +1911,13 @@ int main(int argc, char *argv[])
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
-			normConstants, numThreads, useSingleLev );
+			normConstants, imMeans, numThreads, useSingleLev );
   std::cout<<"Polynomials estimated\n"<<std::flush;
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, clonedImage, labelImage, 
-		flAvgIm, AFAvgIm, BGAvgIm, numThreads, useSingleLev );
+		flAvgIm, AFAvgIm, BGAvgIm, imMeans, numThreads, useSingleLev );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
