@@ -69,6 +69,7 @@ class PassFileNamesFromCLInsteadOfTk():
         self.stdsterr   = ''
         if filename.find(cziStr)!=-1:
           self.WriteNrrdTilesFromCziNShadeCorrect(filename)
+          print filename
           logfile = os.path.splitext(filename)[0]+'.log'
           errfile = os.path.splitext(filename)[0]+'.err'
           f1 = open( logfile, 'a' )
@@ -80,7 +81,7 @@ class PassFileNamesFromCLInsteadOfTk():
         else:
           for root, dirs, czifiles in os.walk(filename):
             for filenameczi in fnmatch.filter(czifiles, cziFilterStr):
-	      prcFilename = os.path.join(root,filenameczi)
+              prcFilename = os.path.join(root,filenameczi)
               self.WriteNrrdTilesFromCziNShadeCorrect(prcFilename)
               logfile = os.path.splitext(prcFilename)[0]+'.log'
               errfile = os.path.splitext(prcFilename)[0]+'.err'
@@ -90,6 +91,8 @@ class PassFileNamesFromCLInsteadOfTk():
               f2 = open( errfile, 'a' )
               f2.write( self.stdsterr )
               f2.close()
+              self.stdstrring = ''
+              self.stdsterr   = ''
 
   def register( self ):
     #files = self.askopenfilename()
@@ -127,7 +130,7 @@ class PassFileNamesFromCLInsteadOfTk():
         os.remove( nrrdFile )
         os.rename( nrrdIllFile, nrrdFile )
         self.RunExec( args, nrrdFile )
-	os.remove( nrrdFile )
+        os.remove( nrrdFile )
       if os.path.exists(nrrdIllFile):
         args = [ dicomConverter, nrrdIllFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
         self.RunExec( args, nrrdIllFile )
