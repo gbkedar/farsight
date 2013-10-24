@@ -1060,13 +1060,14 @@ std::vector< CostImageType::Pointer >
 }
 
 void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads,
-		double lambda1, double lambda2 )
+		double lambda1, double lambda2, int first )
 {
   bool useCholesky = true;
 
   //Run many regression problems in parallel start by allocating space for output coeffs
   std::vector< std::vector< double > > coeffsParallel;
   int numCoeffsPar = numThreads<RegressPar ? numThreads : RegressPar;
+  std::vector< double > normsPar( numCoeffsPar, 0 );
   for( int i=0;i<numCoeffsPar; ++i )
   {
     std::vector< double > tempArr( numCoeffs, 0 );
@@ -1085,6 +1086,9 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     lars.Regress( matX, matY, beta, true );
     for( int j=0;j<numCoeffs; ++j )
       coeffsParallel.at(i).at(j) = beta(j,0);
+    normsPar.at(i) = arma::norm( beta, 1 );
+//#pragma omp critical
+//  beta.t().print();
   }
 
   unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
@@ -1103,14 +1107,20 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
       ++countAtCurrent;
     else
       countAtCurrent=0;
-    if( !zeroCount || (zeroCount<4 && countAtCurrent>1) )
+    double comparecoeff = (i+1)==numCoeffsPar ? normsPar.at(i) : normsPar.at(i+1);
+    if( !zeroCount || (zeroCount<4 && countAtCurrent>1)  || //When relaxing constraints
+	(2*numCoeffs)<comparecoeff ) //When tightening constraints
     {
       regress = false;
-      if( zeroCount )
+      if( first==1 && i==0 && (2*numCoeffs)<normsPar.at(i) && zeroCount<3 )
       {
-	for( unsigned j=0; j<numCoeffs; ++j )
-	  outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
+//	std::cout<<"Tightening constraints\n";
+	Regresss( matX, matY, outCoeffs, numThreads, lambda1*100, lambda2*100, 1 );
+	break;
       }
+//    std::cout<<"Trying "<<(i-countAtCurrent+1)<<" out of "<<numCoeffs<<std::endl;
+      for( unsigned j=0; j<numCoeffs; ++j )
+	outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
       break;
     }
     zeroCountPrev=zeroCount;
@@ -1119,8 +1129,8 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   if( regress )
   {
     double lambda1Cur = lambda1 / pow( 2, ((double)(numCoeffsPar+1)) );
-    double lambda2Cur = lambda2 / pow( sqrt2, ((double)(numCoeffsPar+1)) );
-    Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur );
+    double lambda2Cur = lambda2 / pow( 2, ((double)(numCoeffsPar+1)) );
+    Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur, 0 );
   }
   return;
 }
@@ -1253,8 +1263,8 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
 	++j;
     }
   }
-  double lambda1=0.1, lambda2=0.1;
-  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2 );
+  double lambda1=100, lambda2=100;
+  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 1 );
   return ImValsMean;
 }
 
