@@ -1059,6 +1059,170 @@ std::vector< CostImageType::Pointer >
   return returnVec;
 }
 
+std::vector< CostImageType::Pointer >
+  ComputeMeanImages ( UC3ImageType::Pointer labelImage,
+	US3ImageType::Pointer medFiltIms, int numThreads,
+	int useSingleLev, US3ImageType::PixelType upperThreshold )
+{
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
+  typedef itk::ImageRegionIteratorWithIndex< CostImageType3d > CostIterType3d;
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType > US3IterType;
+  typedef itk::ImageRegionIteratorWithIndex< UC3ImageType > UC3IterType;
+
+  US2ImageType::SizeType size;
+  size[0] = medFiltIms->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = medFiltIms->GetLargestPossibleRegion().GetSize()[1];
+  CostImageType::Pointer BGAvgIm =
+		CreateDefaultCoordsNAllocateSpace<CostImageType>( size );
+
+  US3ImageType::SizeType size3dd;
+  size3dd[0] = size[0]; size3dd[1] = size[1]; size3dd[2] = numThreads;
+  CostImageType3d::Pointer flAvgCounts =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer AFAvgCounts =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer flAvgIms =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+  CostImageType3d::Pointer AFAvgIms =
+		CreateDefaultCoordsNAllocateSpace<CostImageType3d>( size3dd );
+
+  //The background needs a vector pixels on a 2D grid to be sorted
+  std::vector< std::vector<US2ImageType::PixelType> > pixelVectForBG;
+  pixelVectForBG.resize(size[0]*size[1]);
+  for( itk::IndexValueType k=0; k<(size[0]*size[1]); ++k )
+    pixelVectForBG.at(k).resize( medFiltIms->GetLargestPossibleRegion().GetSize()[2] );
+
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+#else
+  #pragma omp parallel for
+#endif
+#endif
+  for( itk::IndexValueType k=0; k<medFiltIms->GetLargestPossibleRegion().GetSize()[2]; ++k )
+  {
+    int tid = omp_get_thread_num();
+    //Declare iterators for each image
+    CostImageType3d::SizeType size3d; CostImageType3d::IndexType start3d;
+    CostImageType3d::RegionType region;
+    size3d[0]  = size[0];  size3d[1]  = size[1]; size3d[2]  = 1;
+    start3d[0] = 0;        start3d[1] = 0;       start3d[2] = tid;
+    region.SetSize( size3d ); region.SetIndex( start3d );
+    //Average and count iterators
+    CostIterType3d flAvgImIter( flAvgIms, region ), flAvgCountIter( flAvgCounts, region );
+    CostIterType3d AFAvgImIter( AFAvgIms, region ), AFAvgCountIter( AFAvgCounts, region );
+    flAvgImIter.GoToBegin(); flAvgCountIter.GoToBegin(); AFAvgImIter.GoToBegin();
+    AFAvgCountIter.GoToBegin();
+
+    //Label image iterator
+    US3ImageType::IndexType startlab; startlab[0] = 0; startlab[1] = 0; startlab[2] = k;
+    US3ImageType::RegionType regionlab;
+    regionlab.SetSize( size3d ); regionlab.SetIndex( startlab );
+    UC3IterType labelImageIter( labelImage, regionlab ); labelImageIter.GoToBegin();
+    US3IterType medFiltImIter( medFiltIms, regionlab ); medFiltImIter.GoToBegin();
+
+    for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++flAvgCountIter, ++AFAvgImIter,
+				++AFAvgCountIter, ++medFiltImIter, ++labelImageIter )
+    {
+      itk::IndexValueType indexValue2d = labelImageIter.GetIndex()[0]*size[1] + 
+						labelImageIter.GetIndex()[1];
+      if( !labelImageIter.Get() )
+	pixelVectForBG.at( indexValue2d ).at(k) = medFiltImIter.Get();
+      else
+	pixelVectForBG.at( indexValue2d ).at(k) = 
+				std::numeric_limits<unsigned short>::max();
+
+      if( medFiltImIter.Get() < upperThreshold )
+      {
+      if( labelImageIter.Get()==1 )
+      {
+	double tempValue = AFAvgImIter.Get()+medFiltImIter.Get();
+	AFAvgImIter.Set( tempValue );
+	double tempCount = AFAvgCountIter.Get()+1;
+	AFAvgCountIter.Set( tempCount );
+      }
+      else if( labelImageIter.Get()==2 )
+      {
+	double tempValue = flAvgImIter.Get()+medFiltImIter.Get();
+	flAvgImIter.Set( tempValue );
+	double tempCount = flAvgCountIter.Get()+1;
+	flAvgCountIter.Set( tempCount );
+      }
+      }
+    }
+  }
+
+  CostImageType::Pointer flAvgCount =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( flAvgCounts );
+  CostImageType::Pointer AFAvgCount =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( AFAvgCounts );
+  CostImageType::Pointer flAvgIm =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( flAvgIms );
+  CostImageType::Pointer AFAvgIm =
+	SumProject3dImageTo2d<CostImageType3d,CostImageType>( AFAvgIms );
+
+  //Average and count iterators
+  CostIterType  flAvgImIter( flAvgIm, flAvgIm->GetLargestPossibleRegion() ),
+		AFAvgImIter( AFAvgIm, AFAvgIm->GetLargestPossibleRegion() ),
+		flAvgCountIter( flAvgCount, flAvgCount->GetLargestPossibleRegion() ),
+		AFAvgCountIter( AFAvgCount, AFAvgCount->GetLargestPossibleRegion() );
+  flAvgImIter.GoToBegin(); flAvgCountIter.GoToBegin();
+  AFAvgImIter.GoToBegin(); AFAvgCountIter.GoToBegin();
+  //Divide by counts to get average
+  for( ; !flAvgImIter.IsAtEnd(); ++flAvgImIter, ++flAvgCountIter, ++AFAvgImIter,
+  				 ++AFAvgCountIter )
+  {
+    if( flAvgCountIter.Get() )
+      flAvgImIter.Set( flAvgImIter.Get()/flAvgCountIter.Get() );
+    else
+      flAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
+    if( AFAvgCountIter.Get() )
+      AFAvgImIter.Set( AFAvgImIter.Get()/AFAvgCountIter.Get() );
+    else
+      AFAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
+  }
+
+  //Sort vectors to get the min of stacks at each pixel
+#ifdef _OPENMP
+#if _OPENMP >= 200805L
+  #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
+#else
+  #pragma omp parallel for
+#endif
+#endif
+  for( itk::IndexValueType i=0; i<pixelVectForBG.size(); ++i )
+    std::sort( pixelVectForBG.at(i).begin(), pixelVectForBG.at(i).end() );
+
+  //Take the average of the bottom NN percent of the non-flour pixels
+  itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
+  CostIterType BGAvgImIter( BGAvgIm, BGAvgIm->GetLargestPossibleRegion() ); 
+  for( BGAvgImIter.GoToBegin(); !BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
+  {
+    itk::IndexValueType indexValue2d = BGAvgImIter.GetIndex()[0]*size[1] + 
+						BGAvgImIter.GetIndex()[1];
+    std::vector<US2ImageType::PixelType>::iterator low;
+    low = std::lower_bound( pixelVectForBG.at(indexValue2d).begin(),
+			    pixelVectForBG.at(indexValue2d).end(),
+			    std::numeric_limits<unsigned short>::max() );
+    itk::IndexValueType validLength = low-pixelVectForBG.at(indexValue2d).begin();
+    if( !validLength ) BGAvgImIter.Set( std::numeric_limits<unsigned short>::max() );
+    else
+    {
+      double average = 0;
+      for( itk::IndexValueType i=0; i<validLength; ++i )
+	average += pixelVectForBG.at(indexValue2d).at(i);
+      average /= validLength;
+      BGAvgImIter.Set( average );
+    }
+  }
+  std::vector< CostImageType::Pointer > returnVec; returnVec.resize(3);
+  flAvgIm->Register(); returnVec.at(0) = flAvgIm;
+  AFAvgIm->Register(); returnVec.at(1) = AFAvgIm;
+  BGAvgIm->Register(); returnVec.at(2) = BGAvgIm;
+
+  return returnVec;
+}
+
 void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads,
 		double lambda1, double lambda2, int first )
 {
@@ -1565,7 +1729,7 @@ double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
   return returnValue;
 }
 
-void CorrectImages( std::vector<double> &flPolyCoeffs,
+double CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
@@ -1612,6 +1776,9 @@ void CorrectImages( std::vector<double> &flPolyCoeffs,
     if( BGMinSurface>IndexVector.at(i).BGVals ) BGMinSurface=IndexVector.at(i).BGVals;
     if( BGMaxSurface<IndexVector.at(i).BGVals ) BGMaxSurface=IndexVector.at(i).BGVals;
   }
+  double delta = flMaxSurface-flMinSurface;
+  if( (AFMaxSurface-AFMinSurface)>delta ) delta = AFMaxSurface-AFMinSurface;
+  if( (BGMaxSurface-BGMinSurface)>delta ) delta = BGMaxSurface-BGMinSurface;
 /*double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
   double AFRatio = std::abs( AvgRatio/(AFMaxSurface-AFMinSurface) );//(AFMaxImage-AFMinImage)/
   double BGRatio = std::abs( AvgRatio/(BGMaxSurface-BGMinSurface) );//(BGMaxImage-BGMinImage)/
@@ -1679,7 +1846,7 @@ if( !useSingleLev )
       inputIter.Set( (US3ImageType::PixelType)curPix );
     }
   }
-  return;
+  return delta;
 }
 
 int main(int argc, char *argv[])
@@ -1926,10 +2093,43 @@ int main(int argc, char *argv[])
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
-  CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants, clonedImage, labelImage, 
-		flAvgIm, AFAvgIm, BGAvgIm, imMeans, numThreads, useSingleLev );
+  double delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
+	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imMeans, numThreads, useSingleLev );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
+
+  std::cout<<"Correction delta:"<<delta<<std::endl;
+
+  unsigned iterCount = 1;
+
+  while( delta>0.01 && iterCount<20 )
+  {
+    std::vector< CostImageType::Pointer > avgImsVecIter = 
+	ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
+    std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
+
+    //Make pointers for the flour, autoflour n bg avg images
+    CostImageType::Pointer flAvgImIt, AFAvgImIt, BGAvgImIt;
+    flAvgImIt = avgImsVecIter.at(0); AFAvgImIt = avgImsVecIter.at(1);
+    BGAvgImIt = avgImsVecIter.at(2);
+
+    ComputePolynomials( flAvgImIt, AFAvgImIt, BGAvgImIt, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
+			normConstants, imMeans, numThreads, useSingleLev );
+    std::cout<<"Polynomials estimated\n"<<std::flush;
+    for( itk::SizeValueType i=0; i<numCoeffs; ++i )
+      std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
+
+    delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
+	clonedImage, labelImage, flAvgImIt, AFAvgImIt, BGAvgImIt, imMeans, numThreads, useSingleLev );
+
+    flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
+    avgImsVecIter.clear();
+
+    std::cout<<"Iteration:"<<iterCount<<"\tCorrection delta:"<<delta<<std::endl;
+
+    ++iterCount;
+  }
+
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
