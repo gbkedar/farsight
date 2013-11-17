@@ -81,6 +81,8 @@ typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 typedef itk::Image< CostPixelType, Dimension3 > CostImageType3d;
 
 std::string nameTemplate;
+double lambda1start = 100;
+double lambda2start = 100;
 
 void usage( const char *funcName )
 {
@@ -1258,6 +1260,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
   bool lambdaChanged = false;
   bool regress = true;
+  bool bestLamNotHere = true;
   for( int i=0;i<numCoeffsPar; ++i )
   {
     unsigned zeroCount = 0;
@@ -1282,6 +1285,8 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 	Regresss( matX, matY, outCoeffs, numThreads, lambda1*100, lambda2*100, 1 );
 	break;
       }
+      else
+	bestLamNotHere = false;
 //    std::cout<<"Trying "<<(i-countAtCurrent+1)<<" out of "<<numCoeffs<<std::endl;
       for( unsigned j=0; j<numCoeffs; ++j )
 	outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
@@ -1296,6 +1301,8 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     double lambda2Cur = lambda2 / pow( 2, ((double)(numCoeffsPar+1)) );
     Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur, 0 );
   }
+  lambda1start = lambda1;
+  lambda2start = lambda2;
   return;
 }
 
@@ -1427,8 +1434,7 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
 	++j;
     }
   }
-  double lambda1=100, lambda2=100;
-  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 1 );
+  Regresss( matX, matY, outCoeffs, numThreads, lambda1start, lambda2start, 1 );
   return ImValsMean;
 }
 
@@ -2102,7 +2108,7 @@ int main(int argc, char *argv[])
 
   unsigned iterCount = 1;
 
-  while( delta>0.01 && iterCount<20 )
+  while( delta>0.02 && iterCount<20 )
   {
     std::vector< CostImageType::Pointer > avgImsVecIter = 
 	ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
