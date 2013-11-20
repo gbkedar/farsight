@@ -68,6 +68,8 @@
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14    //((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
 #define RegressPar 14	//Number of regression problems to be run in parallel
+#define MaxIter 20	//Maximum number of iterations
+#define IterThresh 0.01  //The smallest max-min that is needed to run an iteration
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -1791,6 +1793,8 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
   double delta = flMaxSurface-flMinSurface;
   if( (AFMaxSurface-AFMinSurface)>delta ) delta = AFMaxSurface-AFMinSurface;
   if( (BGMaxSurface-BGMinSurface)>delta ) delta = BGMaxSurface-BGMinSurface;
+  if( delta<IterThresh )
+    return delta;
 /*double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
   double AFRatio = std::abs( AvgRatio/(AFMaxSurface-AFMinSurface) );//(AFMaxImage-AFMinImage)/
   double BGRatio = std::abs( AvgRatio/(BGMaxSurface-BGMinSurface) );//(BGMaxImage-BGMinImage)/
@@ -2107,14 +2111,16 @@ int main(int argc, char *argv[])
 
   double delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
 	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imMeans, numThreads, useSingleLev );
+//  std::vector< double > deltaVec;
+//  deltaVec.push_back( delta );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
   avgImsVec.clear();
 
-  std::cout<<"Correction delta:"<<delta<<std::endl;
+  unsigned iterCount = 0;
 
-  unsigned iterCount = 1;
+  std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
 
-  while( delta>0.01 && iterCount<20 )
+  while( delta>IterThresh && iterCount<MaxIter )
   {
     std::vector< CostImageType::Pointer > avgImsVecIter = 
 	ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
@@ -2137,9 +2143,19 @@ int main(int argc, char *argv[])
     flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
     avgImsVecIter.clear();
 
-    std::cout<<"Iteration:"<<iterCount<<"\tCorrection delta:"<<delta<<std::endl;
-
-    ++iterCount;
+/*  deltaVec.push_back( delta );
+    if( delta>IterThresh )
+    {
+      std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
+      if( deltaVec.size()>4 )
+      {
+	double total=0;
+	for( unsigned i=deltaVec.size()-5; i<deltaVec.size(); ++i )
+	  total+=deltaVec.at(i);
+	if( total<FiveIterThr )
+	  break;
+      }
+    }*/
   }
 
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
