@@ -1253,8 +1253,11 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     for( int j=0;j<numCoeffs; ++j )
       coeffsParallel.at(i).at(j) = beta(j,0);
     normsPar.at(i) = arma::norm( beta, 1 );
-//#pragma omp critical
-//  beta.t().print();
+/*#pragma omp critical
+{
+  std::cout<< i << "\t";
+  beta.t().print();
+}*/
   }
 
   unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
@@ -1301,8 +1304,11 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     double lambda2Cur = lambda2 / pow( 2, ((double)(numCoeffsPar+1)) );
     Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur, 0 );
   }
-  lambda1start = lambda1;
-  lambda2start = lambda2;
+  if( !bestLamNotHere )
+  {
+    lambda1start = lambda1;
+    lambda2start = lambda2;
+  }
   return;
 }
 
@@ -2108,7 +2114,7 @@ int main(int argc, char *argv[])
 
   unsigned iterCount = 1;
 
-  while( delta>0.02 && iterCount<20 )
+  while( delta>0.01 && iterCount<20 )
   {
     std::vector< CostImageType::Pointer > avgImsVecIter = 
 	ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
