@@ -89,7 +89,8 @@ double lambda2start = 100;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24) UseSignleLevel(Default=0)\n";
+	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24)"
+	    << " UseSignleLevel(Default=0) UseNoiseThr(Default=0)\n";
 }
 
 template<typename InputImageType> void WriteITKImage
@@ -1880,12 +1881,18 @@ int main(int argc, char *argv[])
   nameTemplate = inputImageName.substr(0,found) + "_";
   int numThreads = 24;
   int useSingleLev = 0;
+  int runNoiseThr = 0;
   if( argc > 2 )
     numThreads = atoi( argv[2] );
   if( argc > 3 )
   {
     useSingleLev = atoi( argv[3] );
     std::cout<<"Single level flag set to "<<useSingleLev<<std::endl;
+  }
+  if( argc > 4 )
+  {
+    runNoiseThr = atoi( argv[4] );
+    std::cout<<"Noise threshold flag set to "<<runNoiseThr<<std::endl;
   }
 
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
@@ -1924,7 +1931,9 @@ int main(int argc, char *argv[])
     exit (EXIT_FAILURE);
   }
   US3ImageType::Pointer clonedImage = duplicator->GetModifiableOutput();
-  US3ImageType::PixelType upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
+  US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
+  if( runNoiseThr )
+    upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -2143,10 +2152,10 @@ int main(int argc, char *argv[])
     flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
     avgImsVecIter.clear();
 
+    std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
 /*  deltaVec.push_back( delta );
     if( delta>IterThresh )
     {
-      std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
       if( deltaVec.size()>4 )
       {
 	double total=0;
