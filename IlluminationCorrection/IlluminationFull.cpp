@@ -622,7 +622,7 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 
   US3ImageType::PixelType noiseThr = (US3ImageType::PixelType) thresholdVec.at(0);
   if( noiseThr < lowNoiseThr ) //Don't do any noise thresholding
-    noiseThr = itk::NumericTraits<typename OutputImageType::PixelType>::max();
+    noiseThr = itk::NumericTraits<US3ImageType::PixelType>::max();
   else //Do thresholding
 {
   std::cout<<"Noise threshold is: "<<noiseThr<<"\tAverage min is: "<<meanMin<<std::endl;
