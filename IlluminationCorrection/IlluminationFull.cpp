@@ -68,7 +68,7 @@
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14	//((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
 #define RegressPar 14	//Number of regression problems to be run in parallel
-#define MaxIter 20	//Maximum number of iterations
+#define MaxIter 3	//Maximum number of iterations
 #define IterThresh 0.01 //The smallest max-min that is needed to run an iteration
 #define LowerNoiseThr 14000 //Noise threshold should be at least this value 
 
@@ -91,7 +91,7 @@ void usage( const char *funcName )
 {
   std::cout << "USAGE:"
 	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24)"
-	    << " UseSignleLevel(Default=0) UseNoiseThr(Default level 2^13 use 0)\n";
+	    << " UseSignleLevel(Default=0) UseNoiseThr(For max of input pixel type use 0)\n";
 }
 
 template<typename InputImageType> void WriteITKImage
@@ -567,7 +567,8 @@ void returnthresh
   return;
 }
 
-US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads )
+US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads,
+								US3ImageType::PixelType lowNoiseThr )
 {
   typedef itk::MaximumProjectionImageFilter< US3ImageType, US2ImageType > MaxProjFilterType;
   typedef itk::MinimumProjectionImageFilter< US3ImageType, US2ImageType > MinProjFilterType;
@@ -1882,7 +1883,7 @@ int main(int argc, char *argv[])
   nameTemplate = inputImageName.substr(0,found) + "_";
   int numThreads = 24;
   int useSingleLev = 0;
-  long long int runNoiseThr = 0;
+  US3ImageType::PixelType lowNoiseThr = 0;
   if( argc > 2 )
     numThreads = atoi( argv[2] );
   if( argc > 3 )
@@ -1890,11 +1891,9 @@ int main(int argc, char *argv[])
     useSingleLev = atoi( argv[3] );
     std::cout<<"Single level flag set to "<<useSingleLev<<std::endl;
   }
-  if( argc > 4 )
-  {
-    runNoiseThr = atoll( argv[4] );
-    std::cout<<"Lower noise threshold set to "<<runNoiseThr<<std::endl;
-  }
+  if( argc > 4 ) lowNoiseThr = (US3ImageType::PixelType) atoll( argv[4] );
+  else lowNoiseThr = (US3ImageType::PixelType) LowerNoiseThr;
+  std::cout<<"Lower noise threshold set to "<<lowNoiseThr<<std::endl;
 
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
@@ -1933,8 +1932,8 @@ int main(int argc, char *argv[])
   }
   US3ImageType::Pointer clonedImage = duplicator->GetModifiableOutput();
   US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
-  if( runNoiseThr )
-    upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads );
+  if( lowNoiseThr ) 
+    upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
@@ -2165,7 +2164,8 @@ int main(int argc, char *argv[])
 	if( total<FiveIterThr )
 	  break;
       }
-    }*/
+    }
+*/
   }
 
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
