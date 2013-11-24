@@ -62,14 +62,15 @@
 #define WinSz 256	//Histogram computed on this window
 #define CWin  32	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
-#define NN 5.0		//The bottom NN percent are used to estimate the BG
+#define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
 
 #define ORDER 4		//Order of the polynomial 2-4
-#define numCoeffs 14    //((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
+#define numCoeffs 14	//((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
 #define RegressPar 14	//Number of regression problems to be run in parallel
 #define MaxIter 20	//Maximum number of iterations
-#define IterThresh 0.01  //The smallest max-min that is needed to run an iteration
+#define IterThresh 0.01 //The smallest max-min that is needed to run an iteration
+#define LowerNoiseThr 14000 //Noise threshold should be at least this value 
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -90,7 +91,7 @@ void usage( const char *funcName )
 {
   std::cout << "USAGE:"
 	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24)"
-	    << " UseSignleLevel(Default=0) UseNoiseThr(Default=0)\n";
+	    << " UseSignleLevel(Default=0) UseNoiseThr(Default level 2^13 use 0)\n";
 }
 
 template<typename InputImageType> void WriteITKImage
@@ -1881,7 +1882,7 @@ int main(int argc, char *argv[])
   nameTemplate = inputImageName.substr(0,found) + "_";
   int numThreads = 24;
   int useSingleLev = 0;
-  int runNoiseThr = 0;
+  long long int runNoiseThr = 0;
   if( argc > 2 )
     numThreads = atoi( argv[2] );
   if( argc > 3 )
@@ -1891,8 +1892,8 @@ int main(int argc, char *argv[])
   }
   if( argc > 4 )
   {
-    runNoiseThr = atoi( argv[4] );
-    std::cout<<"Noise threshold flag set to "<<runNoiseThr<<std::endl;
+    runNoiseThr = atoll( argv[4] );
+    std::cout<<"Lower noise threshold set to "<<runNoiseThr<<std::endl;
   }
 
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
