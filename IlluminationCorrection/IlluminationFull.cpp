@@ -620,7 +620,12 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
     meanMin += (double)minIter.Get()/size;
   meanMin = std::ceil( meanMin );
 
-  std::cout<<"Noise threshold is: "<<thresholdVec.at(0)<<"\tAverage min is: "<<meanMin<<std::endl;
+  US3ImageType::PixelType noiseThr = (US3ImageType::PixelType) thresholdVec.at(0);
+  if( noiseThr < lowNoiseThr ) //Don't do any noise thresholding
+    noiseThr = itk::NumericTraits<typename OutputImageType::PixelType>::max();
+  else //Do thresholding
+{
+  std::cout<<"Noise threshold is: "<<noiseThr<<"\tAverage min is: "<<meanMin<<std::endl;
 
   itk::IndexValueType numSlices = InputImage->GetLargestPossibleRegion().GetSize()[2];
 #ifdef _OPENMP
@@ -639,7 +644,7 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
     IterTypeUS3d iter( InputImage, region );
     iter.GoToBegin();
     for( ; !iter.IsAtEnd(); ++iter )
-      if( iter.Get()>thresholdVec.at(0) )
+      if( iter.Get()>noiseThr )
       {
         iter.Set( meanMin );
 #ifdef NOISE_THR_DEBUG
@@ -652,7 +657,8 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
   std::string noiseThrFileName = nameTemplate + "noisecorrected.tif";
   WriteITKImage< US3ImageType >( InputImage, noiseThrFileName );
 #endif //NOISE_THR_DEBUG
-  return (US3ImageType::PixelType) thresholdVec.at(0);
+}
+  return (US3ImageType::PixelType) noiseThr;
 }
 
 void ComputeCosts( int numThreads,
