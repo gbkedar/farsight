@@ -19,7 +19,7 @@
 //#define DEBUG_THREE_LEVEL_LABELING
 //#define DEBUG_MEAN_PROJECTIONS
 //#define DEBUG_CORRECTION_SURFACES
-#define NO_GRAPH_CUTS
+//#define NO_GRAPH_CUTS
 
 #include <vector>
 #include <algorithm>
@@ -60,7 +60,7 @@
 #include <mlpack/methods/lars/lars.hpp>
 
 #define WinSz 256	//Histogram computed on this window
-#define CWin  32	//This is half the inner window
+#define CWin  64	//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
@@ -83,7 +83,9 @@ typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
 typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 typedef itk::Image< CostPixelType, Dimension3 > CostImageType3d;
 
-std::string nameTemplate;
+std::string nameTemplate;  //Output name includes directory wiz full path with the extension stripped
+std::string iterTemplate;  //Stores the current iter as a string for debugging outputs
+
 double lambda1start = 100;
 double lambda2start = 100;
 
@@ -622,7 +624,7 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 
   US3ImageType::PixelType noiseThr = (US3ImageType::PixelType) thresholdVec.at(0);
   if( noiseThr < lowNoiseThr ) //Don't do any noise thresholding
-    noiseThr = itk::NumericTraits<typename OutputImageType::PixelType>::max();
+    noiseThr = itk::NumericTraits<US2ImageType::PixelType>::max();
   else //Do thresholding
 {
   std::cout<<"Noise threshold is: "<<noiseThr<<"\tAverage min is: "<<meanMin<<std::endl;
@@ -2157,6 +2159,22 @@ int main(int argc, char *argv[])
 
     flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
     avgImsVecIter.clear();
+
+    std::stringstream ss;
+    ss << iterCount;
+    iterTemplate = ss.str();
+
+#ifdef DEBUG_MEAN_PROJECTIONS
+  std::string flAvgName = nameTemplate + iterTemplate + "flAvg.tif";
+  std::string AFAvgName = nameTemplate + iterTemplate + "AFAvg.tif";
+  std::string BGAvgName = nameTemplate + iterTemplate + "BGAvg.tif";
+  if( !useSingleLev)
+{
+  CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
+}
+  CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
+#endif //DEBUG_MEAN_PROJECTIONS
 
     std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
 /*  deltaVec.push_back( delta );
