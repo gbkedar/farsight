@@ -60,7 +60,7 @@
 #include <mlpack/methods/lars/lars.hpp>
 
 #define WinSz 256	//Histogram computed on this window
-#define CWin  64	//This is half the inner window
+#define CWin  1		//This is half the inner window
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
@@ -331,8 +331,38 @@ void ComputeHistogram(
   return;
 }
 
+void UpdateHistogram(
+	std::vector< US2ImageType::Pointer  > &medFiltImages,
+	std::vector< double > &histogram,
+	US2ImageType::IndexType &start, US3ImageType::PixelType valsPerBin )
+{
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  double pixelContrib = 1.00/(((double)WinSz)*((double)WinSz)*((double)medFiltImages.size()));
+  //Remove the previous col from the histogram
+  US2ImageType::IndexType startRem, startAdd;
+  startRem[0] = start[0]; startRem[1] = start[1]-1;
+  US2ImageType::SizeType size; size[0] = WinSz; size[1] = 1;
+  US2ImageType::RegionType RemRegion, AddRegion;
+  RemRegion.SetSize( size ); RemRegion.SetIndex( startRem );
+  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+  {
+    ConstIterType constIter ( medFiltImages.at(i), RemRegion );
+    for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
+      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]-=pixelContrib;
+  }
+  startAdd[0] = start[0]; startAdd[1] = start[1]+WinSz-1;
+  AddRegion.SetSize( size ); AddRegion.SetIndex( startAdd );
+  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+  {
+    ConstIterType constIter ( medFiltImages.at(i), AddRegion );
+    for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
+      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]+=pixelContrib;
+  }
+}
+
+
 void computePoissonParams( std::vector< double > &histogram,
-			   std::vector< double > &parameters )
+			   std::vector< double > &parameters, bool firstPass )
 {
   itk::SizeValueType max = histogram.size()-1;
   //The three-level min error thresholding algorithm
@@ -343,7 +373,22 @@ void computePoissonParams( std::vector< double > &histogram,
   //where k is the number of parameters of the model and n is the number of samples
   //In this case, k=6 and n=256
   double PenTerm3 = sqrt(6.0)*log(((double)max));
-  for( itk::SizeValueType i=0; i<(max-1); ++i )//to set the first threshold
+  itk::SizeValueType min_i, max_i;
+  if( firstPass )
+  {
+    min_i = 0;
+    max_i = max-1;
+  }
+  else
+  {
+    double histPcChange = 2.0/WinSz*100;
+    if( histPcChange<5.0 ) histPcChange=5.0;
+    histPcChange = std::ceil(histPcChange/100.0*((double)histogram.size()));
+    min_i = (parameters.at(0)-histPcChange)<0 ? 0 : (parameters.at(0)-histPcChange);
+    max_i = (parameters.at(0)+histPcChange)>(histogram.size()-2) ?
+	    (histogram.size()-2) : (parameters.at(0)+histPcChange);
+  }
+  for( itk::SizeValueType i=min_i; i<max_i; ++i )//to set the first threshold
   {
     //compute the current parameters of the first component
     P0 = U0 = 0.0;
@@ -695,18 +740,27 @@ void ComputeCosts( int numThreads,
 #endif
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
+    std::vector< double > parameters( 5, 0 );
+    std::vector< double > histogram( NumBins, 0 );
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
       //Compute histogram at point i,j with window size define WinSz
-      std::vector< double > histogram( NumBins, 0 );
+      US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
       US2ImageType::IndexType start; start[0] = i-WinSz2; start[1] = j-WinSz2;
       if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
       if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
       if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
-      ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
-      US2ImageType::IndexType curPoint; curPoint[0] = i; curPoint[1] = j;
-      std::vector< double > parameters( 5, 0 );
-      computePoissonParams( histogram, parameters );
+      if( j==0 )
+      {
+        ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
+	computePoissonParams( histogram, parameters, true );
+      }
+      else if( start[1]>0 && j<(numCol-WinSz2) )
+      {
+	UpdateHistogram( medFiltImages, histogram, start, valsPerBin );
+	computePoissonParams( histogram, parameters, false );
+      }
+
       std::vector< double > pdf0( histogram.size()+1, 1 );
       ComputePoissonProbability( parameters.at(0), pdf0 );
       std::vector< double > pdf1( histogram.size()+1, 1 );
