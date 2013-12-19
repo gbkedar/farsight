@@ -60,7 +60,7 @@
 #include <mlpack/methods/lars/lars.hpp>
 
 #define WinSz 256	//Histogram computed on this window
-#define CWin  1		//This is half the inner window
+#define CWin  16	//This is half the inner window and must be a divisor of WinSz
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
@@ -340,8 +340,8 @@ void UpdateHistogram(
   double pixelContrib = 1.00/(((double)WinSz)*((double)WinSz)*((double)medFiltImages.size()));
   //Remove the previous col from the histogram
   US2ImageType::IndexType startRem, startAdd;
-  startRem[0] = start[0]; startRem[1] = start[1]-1;
-  US2ImageType::SizeType size; size[0] = WinSz; size[1] = 1;
+  startRem[0] = start[0]; startRem[1] = (start[1]-CWin)<0 ? 0 : (start[1]-CWin);
+  US2ImageType::SizeType size; size[0] = WinSz; size[1] = CWin;
   US2ImageType::RegionType RemRegion, AddRegion;
   RemRegion.SetSize( size ); RemRegion.SetIndex( startRem );
   for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
@@ -755,7 +755,7 @@ void ComputeCosts( int numThreads,
         ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
 	computePoissonParams( histogram, parameters, true );
       }
-      else if( start[1]>0 && j<(numCol-WinSz2) )
+      else if( start[1]>0 && j<(numRow-WinSz-1) )
       {
 	UpdateHistogram( medFiltImages, histogram, start, valsPerBin );
 	computePoissonParams( histogram, parameters, false );
