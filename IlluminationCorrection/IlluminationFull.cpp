@@ -60,7 +60,7 @@
 #include <mlpack/methods/lars/lars.hpp>
 
 #define WinSz 256	//Histogram computed on this window
-#define CWin  16	//This is half the inner window and must be a divisor of WinSz
+#define CWin  8		//This is half the inner window and must be a divisor of WinSz
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
@@ -1884,9 +1884,9 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
   }
 
 #ifdef DEBUG_CORRECTION_SURFACES
-  std::string flSurfName = nameTemplate+"FlSurface.tif";
-  std::string AFSurfName = nameTemplate+"AFSurface.tif";
-  std::string BGSurfName = nameTemplate+"BGSurface.tif";
+  std::string flSurfName = nameTemplate+iterTemplate+"FlSurface.tif";
+  std::string AFSurfName = nameTemplate+iterTemplate+"AFSurface.tif";
+  std::string BGSurfName = nameTemplate+iterTemplate+"BGSurface.tif";
 if( !useSingleLev )
 {
   RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
