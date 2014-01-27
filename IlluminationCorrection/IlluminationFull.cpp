@@ -16,10 +16,10 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-//#define DEBUG_THREE_LEVEL_LABELING
-//#define DEBUG_MEAN_PROJECTIONS
-//#define DEBUG_CORRECTION_SURFACES
-//#define NO_GRAPH_CUTS
+#define DEBUG_THREE_LEVEL_LABELING
+#define DEBUG_MEAN_PROJECTIONS
+#define DEBUG_CORRECTION_SURFACES
+#define NO_GRAPH_CUTS
 
 #include <vector>
 #include <algorithm>
@@ -59,11 +59,13 @@
 #include <mlpack/core.hpp>
 #include <mlpack/methods/lars/lars.hpp>
 
-#define WinSz 256	//Histogram computed on this window
+#define WinSz 64	//Histogram computed on this window
 #define CWin  8		//This is half the inner window and must be a divisor of WinSz
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
+#define HistPCMin 20.0	//Min percentage of histogram to search while 
+			//updating poisson params
 
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14	//((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
@@ -88,6 +90,8 @@ std::string iterTemplate;  //Stores the current iter as a string for debugging o
 
 double lambda1start = 100;
 double lambda2start = 100;
+itk::SizeValueType poissonCompsRepeated = 0;
+itk::SizeValueType poissonCompsFailed   = 0;
 
 void usage( const char *funcName )
 {
@@ -334,37 +338,44 @@ void ComputeHistogram(
 void UpdateHistogram(
 	std::vector< US2ImageType::Pointer  > &medFiltImages,
 	std::vector< double > &histogram,
-	US2ImageType::IndexType &start, US3ImageType::PixelType valsPerBin )
+	US2ImageType::IndexType &start, US2ImageType::IndexType &prevStart,
+	US3ImageType::PixelType valsPerBin )
 {
   typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
   double pixelContrib = 1.00/(((double)WinSz)*((double)WinSz)*((double)medFiltImages.size()));
   //Remove the previous col from the histogram
   US2ImageType::IndexType startRem, startAdd;
   startRem[0] = start[0]; startRem[1] = (start[1]-CWin)<0 ? 0 : (start[1]-CWin);
-  US2ImageType::SizeType size; size[0] = WinSz; size[1] = CWin;
+  US2ImageType::SizeType size;
+  size[0] = WinSz; size[1] = start[1]-prevStart[1];//(start[1]-CWin)<0 ? CWin-start[1]+CWin : CWin;
   US2ImageType::RegionType RemRegion, AddRegion;
   RemRegion.SetSize( size ); RemRegion.SetIndex( startRem );
   for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
   {
     ConstIterType constIter ( medFiltImages.at(i), RemRegion );
     for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
-      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]-=pixelContrib;
+      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]
+	-=pixelContrib;
   }
-  startAdd[0] = start[0]; startAdd[1] = start[1]+WinSz-1;
+  startAdd[0] = start[0]; startAdd[1] = start[1]+WinSz-size[1];
   AddRegion.SetSize( size ); AddRegion.SetIndex( startAdd );
   for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
   {
     ConstIterType constIter ( medFiltImages.at(i), AddRegion );
     for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
-      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]+=pixelContrib;
+      histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)]
+	+=pixelContrib;
   }
+  for( itk::SizeValueType i=0; i<histogram.size(); ++i ) 
+    if( histogram.at(i) < pixelContrib ) histogram.at(i) = 0;
+  return;
 }
-
 
 void computePoissonParams( std::vector< double > &histogram,
 			   std::vector< double > &parameters, bool firstPass )
 {
   itk::SizeValueType max = histogram.size()-1;
+  std::vector< double > parametersCopy( parameters );
   //The three-level min error thresholding algorithm
   double min_J = DBL_MAX;
   double P0, U0, P1, U1, P2, U2, U, J;
@@ -373,20 +384,30 @@ void computePoissonParams( std::vector< double > &histogram,
   //where k is the number of parameters of the model and n is the number of samples
   //In this case, k=6 and n=256
   double PenTerm3 = sqrt(6.0)*log(((double)max));
+  double pc5=0, pc10=0, pc15=0, pc85=0, pc90=0, histPc=0;
+  for( itk::SizeValueType i=0; i<histogram.size(); ++i )
+  {
+    histPc += histogram.at(i);
+    if( histPc > 0.05 && !pc5 ) pc5 = i ? i-1 : i;
+    if( histPc > 0.10 && !pc10 ) pc10 = i ? i-1 : i;
+    if( histPc > 0.15 && !pc15 ) pc15 = i ? i-1 : i;
+    if( histPc > 0.85 && !pc85 ) pc85 = i ? i-1 : i;
+    if( histPc > 0.90 && !pc90 ) pc90 = i ? i-1 : i;
+  }
   itk::SizeValueType min_i, max_i;
   if( firstPass )
   {
-    min_i = 0;
-    max_i = max-1;
+    min_i = pc5;
+    max_i = pc85;
   }
   else
   {
     double histPcChange = 2.0/WinSz*100;
-    if( histPcChange<5.0 ) histPcChange=5.0;
+    if( histPcChange<HistPCMin ) histPcChange=HistPCMin;
     histPcChange = std::ceil(histPcChange/100.0*((double)histogram.size()));
-    min_i = (parameters.at(0)-histPcChange)<0 ? 0 : (parameters.at(0)-histPcChange);
-    max_i = (parameters.at(0)+histPcChange)>(histogram.size()-2) ?
-	    (histogram.size()-2) : (parameters.at(0)+histPcChange);
+    min_i = (parameters.at(0)-histPcChange)<pc5 ? pc5 : (parameters.at(0)-histPcChange);
+    max_i = (parameters.at(0)+histPcChange)>pc85 ?
+		pc85 : (parameters.at(0)+histPcChange);
   }
   for( itk::SizeValueType i=min_i; i<max_i; ++i )//to set the first threshold
   {
@@ -399,7 +420,7 @@ void computePoissonParams( std::vector< double > &histogram,
     }
     U0 /= P0;
 
-    for( itk::SizeValueType j=i+1; j<max; ++j )//to set the second threshold
+    for( itk::SizeValueType j=i+1>pc10?i+1:pc10; j<pc90; ++j )//to set the second threshold
     {
       //compute the current parameters of the second component
       P1 = U1 = 0.0;
@@ -443,7 +464,6 @@ void computePoissonParams( std::vector< double > &histogram,
   for( itk::SizeValueType j=0; j<parameters.size(); ++j )
     std::cout<<parameters.at(j)<<"\t";
   std::cout<<"\n"<<std::flush;
-#endif //DEBUG_POS_EST
 
   //try this: see if using two components is better
   //The penalty term is given as sqrt(k)*ln(n)
@@ -460,7 +480,6 @@ void computePoissonParams( std::vector< double > &histogram,
     }
     U0 /= P0;
 
-#ifdef DEBUG_POS_EST
     for( itk::SizeValueType j=i+1; j<max; ++j )//to set the second threshold
     {
       //compute the current parameters of the second component
@@ -485,15 +504,55 @@ void computePoissonParams( std::vector< double > &histogram,
 //        throw;
       }
     }
-#endif
   }
-#ifdef DEBUG_POS_EST
   std::cout<<"Parameters2: ";
   for( itk::SizeValueType j=0; j<parameters.size(); ++j )
     std::cout<<parameters.at(j)<<"\t";
   std::cout<<"\n"<<std::flush;
 #endif //DEBUG_POS_EST
+  double delU0Pc = firstPass?0.0:(parameters.at(0)-parametersCopy.at(0))/ 
+  			((double)histogram.size());
+  double delU1Pc = firstPass?0.0:(parameters.at(1)-parametersCopy.at(1))/
+  			((double)histogram.size());
+  double delU2Pc = firstPass?0.0:(parameters.at(2)-parametersCopy.at(2))/
+  			((double)histogram.size());
 
+  if( parameters.at(0) >= histogram.size() ||
+      parameters.at(1) >= histogram.size() ||
+      parameters.at(2) >= histogram.size() || 
+      delU0Pc > HistPCMin ||
+      delU1Pc > HistPCMin ||
+      delU2Pc > HistPCMin )
+  {
+#ifdef _OPENMP
+#pragma omp critical
+#endif //_OPENMP
+    ++poissonCompsRepeated;
+
+    if( !firstPass )
+      computePoissonParams( histogram, parameters, true );
+    else
+    {
+      if( parameters.at(0)>=histogram.size() )
+      {
+	parameters.at(0)=histogram.size()-3;
+	parameters.at(1)=histogram.size()-2;
+	parameters.at(2)=histogram.size()-1;
+      }
+      else if( parameters.at(1)>=histogram.size() )
+      {
+	parameters.at(1)=histogram.size()-2;
+	parameters.at(2)=histogram.size()-1;
+      }
+      else parameters.at(2)=histogram.size()-1;
+
+#ifdef _OPENMP
+#pragma omp critical
+#endif //_OPENMP
+      ++poissonCompsFailed;
+
+    }
+  }
   return;
 }
 
@@ -669,7 +728,15 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 
   US3ImageType::PixelType noiseThr = (US3ImageType::PixelType) thresholdVec.at(0);
   if( noiseThr < lowNoiseThr ) //Don't do any noise thresholding
-    noiseThr = itk::NumericTraits<US2ImageType::PixelType>::max();
+  {
+    noiseThr = itk::NumericTraits<US2ImageType::PixelType>::min();
+    ConstIterType maxIter( maxIntProjFilt->GetOutput(),
+			   maxIntProjFilt->GetOutput()->GetLargestPossibleRegion() );
+    maxIter.GoToBegin();
+    for( ; !maxIter.IsAtEnd(); ++maxIter )
+      if( maxIter.Get()>noiseThr )
+        noiseThr = maxIter.Get();
+  }
   else //Do thresholding
 {
   std::cout<<"Noise threshold is: "<<noiseThr<<"\tAverage min is: "<<meanMin<<std::endl;
@@ -729,6 +796,7 @@ void ComputeCosts( int numThreads,
 				GetLargestPossibleRegion().GetSize()[0];
   itk::IndexValueType WinSz2 = (itk::IndexValueType)floor(((double)WinSz)/2+0.5)
 			      -(itk::IndexValueType)floor(((double)CWin)/2+0.5);
+  itk::IndexValueType WinSzHalf = (itk::IndexValueType)floor(((double)WinSz)/2+0.5);
 
 #ifdef DEBUG_RESCALING_N_COST_EST
   unsigned count = 0;
@@ -742,6 +810,7 @@ void ComputeCosts( int numThreads,
   {
     std::vector< double > parameters( 5, 0 );
     std::vector< double > histogram( NumBins, 0 );
+    US2ImageType::IndexType prevStart; prevStart[0] = 0; prevStart[1] = 0;
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
       //Compute histogram at point i,j with window size define WinSz
@@ -755,11 +824,12 @@ void ComputeCosts( int numThreads,
         ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
 	computePoissonParams( histogram, parameters, true );
       }
-      else if( start[1]>0 && j<(numRow-WinSz-1) )
+      else if( start[1]>0 && j<(numRow-WinSzHalf-1) )
       {
-	UpdateHistogram( medFiltImages, histogram, start, valsPerBin );
+	UpdateHistogram( medFiltImages, histogram, start, prevStart, valsPerBin );
 	computePoissonParams( histogram, parameters, false );
       }
+      prevStart[0] = start[0]; prevStart[1] = start[1];
 
       std::vector< double > pdf0( histogram.size()+1, 1 );
       ComputePoissonProbability( parameters.at(0), pdf0 );
@@ -767,6 +837,7 @@ void ComputeCosts( int numThreads,
       ComputePoissonProbability( parameters.at(1), pdf1 );
       std::vector< double > pdf2( histogram.size()+1, 1 );
       ComputePoissonProbability( parameters.at(2), pdf2 );
+
 #ifdef DEBUG_RESCALING_N_COST_EST
       if( !omp_get_thread_num() )
       {
@@ -863,6 +934,10 @@ void ComputeCosts( int numThreads,
       }
     }
   }
+  std::cout<<"Number of Poisson estimation steps repeated:"<<poissonCompsRepeated
+	<<std::endl;
+  std::cout<<"Number of Poisson estimation steps failed:"<<poissonCompsFailed
+	<<std::endl;
   return;
 }
 
@@ -1320,11 +1395,11 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     for( int j=0;j<numCoeffs; ++j )
       coeffsParallel.at(i).at(j) = beta(j,0);
     normsPar.at(i) = arma::norm( beta, 1 );
-/*#pragma omp critical
+#pragma omp critical
 {
   std::cout<< i << "\t";
   beta.t().print();
-}*/
+}
   }
 
   unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
@@ -1351,13 +1426,15 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
       regress = false;
       if( first==1 && i==0 && (2*numCoeffs)<normsPar.at(i) && zeroCount<3 )
       {
-//	std::cout<<"Tightening constraints\n";
-	Regresss( matX, matY, outCoeffs, numThreads, lambda1*100, lambda2*100, 1 );
+	std::cout<<"Tightening constraints\n";
+	Regresss( matX, matY, outCoeffs, numThreads,
+		lambda1 * pow( 2, ((double)(numCoeffsPar+1)) ),
+		lambda2 * pow( sqrt2, ((double)(numCoeffsPar+1)) ), 1 );
 	break;
       }
       else
 	bestLamNotHere = false;
-//    std::cout<<"Trying "<<(i-countAtCurrent+1)<<" out of "<<numCoeffs<<std::endl;
+      std::cout<<"Trying "<<(i-countAtCurrent+1)<<" out of "<<numCoeffs<<std::endl;
       for( unsigned j=0; j<numCoeffs; ++j )
 	outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
       break;
@@ -1368,7 +1445,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   if( regress )
   {
     double lambda1Cur = lambda1 / pow( 2, ((double)(numCoeffsPar+1)) );
-    double lambda2Cur = lambda2 / pow( 2, ((double)(numCoeffsPar+1)) );
+    double lambda2Cur = lambda2 / pow( sqrt2, ((double)(numCoeffsPar+1)) );
     Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur, 0 );
   }
   if( !bestLamNotHere )
@@ -1965,7 +2042,7 @@ int main(int argc, char *argv[])
   itk::SizeValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
 
-  std::cout<<"Number of slices:"<<numSlices<<std::endl;
+  std::cout<<"Number of slices:"<<numSlices<<" Rows[0]:"<<numRow<<" Cols: "<<numCol<<"\n";
 
   std::vector< US2ImageType::Pointer  > medFiltImages;
   std::vector< CostImageType::Pointer > autoFlourCosts, flourCosts;
@@ -2010,7 +2087,7 @@ int main(int argc, char *argv[])
   {
     US2ImageType::Pointer currentSlice = GetTile( inputImage, (itk::SizeValueType)i );
     //Median filter for each slice to remove thermal noise
-    MedianFilterType::Pointer medFilter = MedianFilterType::New();
+    /*MedianFilterType::Pointer medFilter = MedianFilterType::New();
     medFilter->SetInput( currentSlice );
     medFilter->SetRadius( 5 );
     try
@@ -2022,7 +2099,9 @@ int main(int argc, char *argv[])
       std::cerr << "Exception caught median filter!" << excep << std::endl;
       exit (EXIT_FAILURE);
     }
-    US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
+    US2ImageType::Pointer medFiltIm = medFilter->GetOutput();*/
+    US2ImageType::Pointer medFiltIm = currentSlice; //No median filter
+
     medFiltIm->Register();
     medFiltImages.at(i) = medFiltIm;
     //Allocate space for costs
