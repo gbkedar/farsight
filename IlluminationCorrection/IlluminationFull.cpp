@@ -16,8 +16,8 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-#define DEBUG_THREE_LEVEL_LABELING
-#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_THREE_LEVEL_LABELING
+//#define DEBUG_MEAN_PROJECTIONS
 #define DEBUG_CORRECTION_SURFACES
 #define NO_GRAPH_CUTS
 
@@ -69,10 +69,12 @@
 
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14	//((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
-#define RegressPar 14	//Number of regression problems to be run in parallel
-#define MaxIter 3	//Maximum number of iterations
+#define useCholesky true//Use Cholesky decomposition in ARMA
+#define MaxIter 1	//Maximum number of iterations
 #define IterThresh 0.01 //The smallest max-min that is needed to run an iteration
-#define LowerNoiseThr 14000 //Noise threshold should be at least this value 
+#define LowerNoiseThr 14000 //Noise threshold should be at least this value
+#define MY_EPS 1.8E-10  //Defining a threshold for double precision
+#define L2THR 0.1	//Min accuracy with which L2 condition in Regression should be satisfied
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -85,11 +87,13 @@ typedef itk::Image< USPixelType, Dimension2 > US2ImageType;
 typedef itk::Image< CostPixelType, Dimension2 > CostImageType;
 typedef itk::Image< CostPixelType, Dimension3 > CostImageType3d;
 
-std::string nameTemplate;  //Output name includes directory wiz full path with the extension stripped
-std::string iterTemplate;  //Stores the current iter as a string for debugging outputs
+//Output name includes directory wiz full path with the extension stripped
+std::string nameTemplate;
+//Stores the current iter as a string for debugging outputs
+std::string iterTemplate; 
 
-double lambda1start = 100;
-double lambda2start = 100;
+double lambda1start = 32768; //Kept arbitrarily large
+double lambda2start = 32768; //Kept arbitrarily large
 itk::SizeValueType poissonCompsRepeated = 0;
 itk::SizeValueType poissonCompsFailed   = 0;
 
@@ -121,12 +125,31 @@ template<typename InputImageType> void WriteITKImage
 }
 
 template<typename InputImageType> typename InputImageType::Pointer
-  ReadITKImage( std::string inputName )
+  ReadITKImageScifio( std::string inputName )
 {
   typedef typename itk::ImageFileReader< InputImageType > ReaderType;
   typename ReaderType::Pointer reader = ReaderType::New();
   itk::SCIFIOImageIO::Pointer io = itk::SCIFIOImageIO::New();
   reader->SetImageIO( io );
+  reader->SetFileName( inputName.c_str() );
+  try
+  {
+    reader->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  typename InputImageType::Pointer inputImagePointer = reader->GetOutput();
+  return inputImagePointer;
+}
+
+template<typename InputImageType> typename InputImageType::Pointer
+  ReadITKImage( std::string inputName )
+{
+  typedef typename itk::ImageFileReader< InputImageType > ReaderType;
+  typename ReaderType::Pointer reader = ReaderType::New();
   reader->SetFileName( inputName.c_str() );
   try
   {
@@ -170,6 +193,30 @@ itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
   return outputImage;
 }
 
+template<typename InputImageType, typename OutputImageType> 
+  typename OutputImageType::Pointer CastImage
+    ( typename InputImageType::Pointer inputImage )
+{
+  typedef typename itk::CastImageFilter<InputImageType,
+  					OutputImageType> CastFilterType;
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"Error! This cast function needs equal input and output dimensions";
+  }
+  typename CastFilterType::Pointer cast = CastFilterType::New();
+  cast->SetInput( inputImage );
+  try
+  {
+    cast->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  return cast->GetOutput();
+}
+
 template<typename InputImageType, typename OutputImageType> void CastNWriteImage
   ( typename InputImageType::Pointer inputImage,
     std::string &outFileName )
@@ -181,9 +228,9 @@ template<typename InputImageType, typename OutputImageType> void CastNWriteImage
     std::cout<<"This function needs equal input and output dimensions";
     return;
   }
-  typename CastFilterType::Pointer cast = CastFilterType::New();
-  cast->SetInput( inputImage );
-  WriteITKImage< OutputImageType >( cast->GetOutput(), outFileName );
+  typename OutputImageType::Pointer cast = 
+		CastImage< InputImageType, OutputImageType >( inputImage );
+  WriteITKImage< OutputImageType >( cast, outFileName );
   return;
 }
 
@@ -673,8 +720,8 @@ void returnthresh
   return;
 }
 
-US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage, int numThreads,
-								US3ImageType::PixelType lowNoiseThr )
+US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputImage,
+				int numThreads,	US3ImageType::PixelType lowNoiseThr )
 {
   typedef itk::MaximumProjectionImageFilter< US3ImageType, US2ImageType > MaxProjFilterType;
   typedef itk::MinimumProjectionImageFilter< US3ImageType, US2ImageType > MinProjFilterType;
@@ -1368,91 +1415,143 @@ std::vector< CostImageType::Pointer >
 }
 
 void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads,
-		double lambda1, double lambda2, int first )
+		double lambda1, double lambda2, int task, double spacing = 0 )
 {
-  bool useCholesky = true;
-
   //Run many regression problems in parallel start by allocating space for output coeffs
   std::vector< std::vector< double > > coeffsParallel;
-  int numCoeffsPar = numThreads<RegressPar ? numThreads : RegressPar;
+  int numCoeffsPar = numThreads<numCoeffs ? numCoeffs : numThreads;
   std::vector< double > normsPar( numCoeffsPar, 0 );
-  for( int i=0;i<numCoeffsPar; ++i )
+  for( int i=0; i<numCoeffsPar; ++i )
   {
     std::vector< double > tempArr( numCoeffs, 0 );
     coeffsParallel.push_back( tempArr );
   }
-  double sqrt2 = sqrt(2.0);
 #ifdef _OPENMP
-  #pragma omp parallel for
+  #pragma omp parallel for num_threads(numThreads)
 #endif //_OPENMP
-  for( int i=0;i<numCoeffsPar; ++i )
+  for( int i=0; i<numCoeffsPar; ++i )
   {
-    double lambda1Cur = lambda1 / pow( 2, ((double)i) );
-    double lambda2Cur = lambda2 / pow( sqrt2, ((double)i) );
+    double lambda1Cur = lambda1;
+    if( task==1 ) lambda1Cur /= pow( 2, ((double)i) );
+    double lambda2Cur = lambda2;
+    if( task==2 ) lambda2Cur /= pow( 2, ((double)i) );
+    if( task==3 ) lambda2Cur = lambda2+spacing*i;
     mlpack::regression::LARS lars( useCholesky, lambda1Cur, lambda2Cur );
     arma::vec beta;
     lars.Regress( matX, matY, beta, true );
     for( int j=0;j<numCoeffs; ++j )
       coeffsParallel.at(i).at(j) = beta(j,0);
-    normsPar.at(i) = arma::norm( beta, 1 );
-#pragma omp critical
-{
-  std::cout<< i << "\t";
-  beta.t().print();
-}
+    normsPar.at(i) = arma::norm( beta, 2);
+//#pragma omp critical
+//{
+//  std::cout<< i << "\t";
+//  if( task==1 ) std::cout<<"L1="<<lambda1Cur<<"\n";
+//  if( task==2 ) std::cout<<"L2="<<lambda2Cur<<"\t"<<"L2Norn="<<normsPar.at(i)<<"\n";
+//  if( task==3 ) std::cout<<"L2="<<lambda2Cur<<"\t"<<"L2Norn="<<normsPar.at(i)<<"\n";
+//  beta.t().print();
+//}
   }
-
-  unsigned zeroCountPrev=numCoeffs, countAtCurrent=0;
-  bool lambdaChanged = false;
-  bool regress = true;
-  bool bestLamNotHere = true;
-  for( int i=0;i<numCoeffsPar; ++i )
-  {
-    unsigned zeroCount = 0;
-    for( int j=0; j<numCoeffs; ++j )
+  int firstGoodVal = -1;
+  if( task==1 )
+  { //Loosen L1 constraints till all the variables are included
+    for( int i=0;i<coeffsParallel.size(); ++i )
     {
-      if( !coeffsParallel.at(i).at(j) )
-	++zeroCount;
-      outCoeffs.at(j) = coeffsParallel.at(i).at(j);
-    }
-    if( zeroCount==zeroCountPrev )
-      ++countAtCurrent;
-    else
-      countAtCurrent=0;
-    double comparecoeff = (i+1)==numCoeffsPar ? normsPar.at(i) : normsPar.at(i+1);
-    if( !zeroCount || (zeroCount<4 && countAtCurrent>1)  || //When relaxing constraints
-	(2*numCoeffs)<comparecoeff ) //When tightening constraints
-    {
-      regress = false;
-      if( first==1 && i==0 && (2*numCoeffs)<normsPar.at(i) && zeroCount<3 )
+      unsigned zeroCount = 0;
+      for( int j=0; j<numCoeffs; ++j )
       {
-	std::cout<<"Tightening constraints\n";
-	Regresss( matX, matY, outCoeffs, numThreads,
-		lambda1 * pow( 2, ((double)(numCoeffsPar+1)) ),
-		lambda2 * pow( sqrt2, ((double)(numCoeffsPar+1)) ), 1 );
+	if( std::abs(coeffsParallel.at(i).at(j))<MY_EPS )
+	  ++zeroCount;
+      }
+      if( !zeroCount )
+      {
+	firstGoodVal = i;
+	lambda1 /= pow( 2, ((double)i) );
+	//std::cout<<"L1 set to "<<lambda1start<<std::endl;
 	break;
       }
-      else
-	bestLamNotHere = false;
-      std::cout<<"Trying "<<(i-countAtCurrent+1)<<" out of "<<numCoeffs<<std::endl;
-      for( unsigned j=0; j<numCoeffs; ++j )
-	outCoeffs.at(j) = coeffsParallel.at(i-countAtCurrent).at(j);
-      break;
     }
-    zeroCountPrev=zeroCount;
+    if( firstGoodVal<0 )
+    {
+      lambda1 /= pow( 2, ((double)numCoeffsPar) );
+      //std::cout<<"Loosening L1 constraints to Lambda 1 ="<<lambda1<<"\n";
+      Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 1 );
+      return;
+    }
   }
-  coeffsParallel.clear();
-  if( regress )
+  if( firstGoodVal>-1 )
+  { //Adjust L2 constraints
+    if( normsPar.at(firstGoodVal)>1.0 )
+    {
+      lambda2 *= pow( 2, ((double)(numCoeffsPar-1)) );
+      //std::cout<<"Tightening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+      Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
+    }
+    else
+    {
+      lambda2 /= pow( 2, ((double)(numCoeffsPar-1)) );
+      //std::cout<<"Loosening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+      Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
+    }
+    return;
+  }
+  if( task==2 )
   {
-    double lambda1Cur = lambda1 / pow( 2, ((double)(numCoeffsPar+1)) );
-    double lambda2Cur = lambda2 / pow( sqrt2, ((double)(numCoeffsPar+1)) );
-    Regresss( matX, matY, outCoeffs, numThreads, lambda1Cur, lambda2Cur, 0 );
+    if( !(normsPar.at(0)<1.0 && normsPar.at(0)>1.0) )
+    { //Search for the range in which L2 are around 1
+      for( itk::SizeValueType i=1; i<normsPar.size(); ++i )
+      {
+	if( normsPar.at(i-1)<1.0 && normsPar.at(i)>1.0 )
+	  lambda2 /= pow( 2, ((double)i) );
+      }
+    }
+    else
+    {
+      if( normsPar.at(0)>1.0 )
+      {
+	lambda2 *= pow( 2, ((double)(numCoeffsPar-1)) );
+	//std::cout<<"Tightening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+	Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
+      }
+      else
+      {
+	lambda2 /= pow( 2, ((double)(numCoeffsPar-1)) );
+	//std::cout<<"Loosening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+	Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
+      }
+      return;
+    }
+//    std::cout<<"Searching with Lambda 1 lower bound is:"<<lambda1
+//	<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
+    spacing = (lambda2*2-lambda2)/(numCoeffsPar-1);
+    Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing );
+    return;
   }
-  if( !bestLamNotHere )
-  {
-    lambda1start = lambda1;
-    lambda2start = lambda2;
-  }
+  if( task==3 )
+    for( itk::SizeValueType i=1; i<coeffsParallel.size(); ++i )
+      if( normsPar.at(i)<1.0 )
+      {
+	if( (normsPar.at(i)-1.0) > L2THR )
+	{
+	  lambda2 = lambda2+spacing*(i-1);
+	  spacing /= (numCoeffsPar-1);
+//	  std::cout<<"Searching with Lambda 1 lower bound is:"<<lambda1
+//		<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
+	  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing );
+	  return;
+	}
+	else
+	{
+//	  std::cout<<"Lambda 2 is:"<<lambda2<<" L2norm is:"<<normsPar.at(i-1)<<"\n";
+	  break;
+	}
+      }
+  //Compute plain regression error estimate
+  //Compute current elastic net estimate
+  //Tighten L1 and pick a (manual?) threshold for reduction is RSS
+  
+  lambda1start = lambda1;
+  lambda2start = lambda2;
+  if(1) exit(1); //Delete when done *****************************
   return;
 }
 
@@ -1702,67 +1801,67 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
     double XY3  = currentIndex.X*Y3;
     double Y4   = Y2*Y2;
 #endif
-    currentIndex.FlVals = flPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(0))
-			/normConstants.at(numCoeffs))
-+flPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1))
-+flPolyCoeffs.at(2)*((X2-normConstants.at(2))/normConstants.at(numCoeffs+2))
-+flPolyCoeffs.at(3)*((Y2-normConstants.at(3))/normConstants.at(numCoeffs+3))
-+flPolyCoeffs.at(4)*((XY-normConstants.at(4))/normConstants.at(numCoeffs+4))
+    currentIndex.FlVals = flPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(0)))
+			//normConstants.at(numCoeffs))
++flPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(1)))//normConstants.at(numCoeffs+1))
++flPolyCoeffs.at(2)*((X2-normConstants.at(2)))//normConstants.at(numCoeffs+2))
++flPolyCoeffs.at(3)*((Y2-normConstants.at(3)))//normConstants.at(numCoeffs+3))
++flPolyCoeffs.at(4)*((XY-normConstants.at(4)))//normConstants.at(numCoeffs+4))
 #if ORDER>2
-+flPolyCoeffs.at(5)*((X3 -normConstants.at(5))/normConstants.at(numCoeffs+5))
-+flPolyCoeffs.at(6)*((X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6))
-+flPolyCoeffs.at(7)*((XY2-normConstants.at(7))/normConstants.at(numCoeffs+7))
-+flPolyCoeffs.at(8)*((Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8))
++flPolyCoeffs.at(5)*((X3 -normConstants.at(5)))//normConstants.at(numCoeffs+5))
++flPolyCoeffs.at(6)*((X2Y-normConstants.at(6)))//normConstants.at(numCoeffs+6))
++flPolyCoeffs.at(7)*((XY2-normConstants.at(7)))//normConstants.at(numCoeffs+7))
++flPolyCoeffs.at(8)*((Y3 -normConstants.at(8)))//normConstants.at(numCoeffs+8))
 #endif
 #if ORDER>3
-+flPolyCoeffs.at(9) *((X4  -normConstants.at(9))/normConstants.at(numCoeffs+9))
-+flPolyCoeffs.at(10)*((X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10))
-+flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11))
-+flPolyCoeffs.at(12)*((XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12))
-+flPolyCoeffs.at(13)*((Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13))
-+imMeans.at(0)
++flPolyCoeffs.at(9) *((X4  -normConstants.at(9)))//normConstants.at(numCoeffs+9))
++flPolyCoeffs.at(10)*((X3Y -normConstants.at(10)))//normConstants.at(numCoeffs+10))
++flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11)))//normConstants.at(numCoeffs+11))
++flPolyCoeffs.at(12)*((XY3 -normConstants.at(12)))//normConstants.at(numCoeffs+12))
++flPolyCoeffs.at(13)*((Y4  -normConstants.at(13)))//normConstants.at(numCoeffs+13))
+//+imMeans.at(0)
 #endif
 	;
-    currentIndex.AFVals = AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs))
-			/normConstants.at(3*numCoeffs))
+    currentIndex.AFVals = AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs)))
+			//normConstants.at(3*numCoeffs))
 +AFPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1))
-+AFPolyCoeffs.at(2)*((X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2))
-+AFPolyCoeffs.at(3)*((Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3))
-+AFPolyCoeffs.at(4)*((XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4))
++AFPolyCoeffs.at(2)*((X2-normConstants.at(2*numCoeffs+2)))//normConstants.at(3*numCoeffs+2))
++AFPolyCoeffs.at(3)*((Y2-normConstants.at(2*numCoeffs+3)))//normConstants.at(3*numCoeffs+3))
++AFPolyCoeffs.at(4)*((XY-normConstants.at(2*numCoeffs+4)))//normConstants.at(3*numCoeffs+4))
 #if ORDER>2
-+AFPolyCoeffs.at(5)*((X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5))
-+AFPolyCoeffs.at(6)*((X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6))
-+AFPolyCoeffs.at(7)*((XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7))
-+AFPolyCoeffs.at(8)*((Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8))
++AFPolyCoeffs.at(5)*((X3 -normConstants.at(2*numCoeffs+5)))//normConstants.at(3*numCoeffs+5))
++AFPolyCoeffs.at(6)*((X2Y-normConstants.at(2*numCoeffs+6)))//normConstants.at(3*numCoeffs+6))
++AFPolyCoeffs.at(7)*((XY2-normConstants.at(2*numCoeffs+7)))//normConstants.at(3*numCoeffs+7))
++AFPolyCoeffs.at(8)*((Y3 -normConstants.at(2*numCoeffs+8)))//normConstants.at(3*numCoeffs+8))
 #endif
 #if ORDER>3
-+AFPolyCoeffs.at(9) *((X4  -normConstants.at(2*numCoeffs+9))/normConstants.at(3*numCoeffs+9))
-+AFPolyCoeffs.at(10)*((X3Y -normConstants.at(2*numCoeffs+10))/normConstants.at(3*numCoeffs+10))
-+AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11))
-+AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12))
-+AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13))
-+imMeans.at(1)
++AFPolyCoeffs.at(9) *((X4  -normConstants.at(2*numCoeffs+9)))//normConstants.at(3*numCoeffs+9))
++AFPolyCoeffs.at(10)*((X3Y -normConstants.at(2*numCoeffs+10)))//normConstants.at(3*numCoeffs+10))
++AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11)))//normConstants.at(3*numCoeffs+11))
++AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12)))//normConstants.at(3*numCoeffs+12))
++AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13)))//normConstants.at(3*numCoeffs+13))
+//+imMeans.at(1)
 #endif
 	;
 currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*numCoeffs))
 			/normConstants.at(5*numCoeffs))
 +BGPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(4*numCoeffs+1))/normConstants.at(5*numCoeffs+1))
-+BGPolyCoeffs.at(2)*((X2-normConstants.at(4*numCoeffs+2))/normConstants.at(5*numCoeffs+2))
-+BGPolyCoeffs.at(3)*((Y2-normConstants.at(4*numCoeffs+3))/normConstants.at(5*numCoeffs+3))
-+BGPolyCoeffs.at(4)*((XY-normConstants.at(4*numCoeffs+4))/normConstants.at(5*numCoeffs+4))
++BGPolyCoeffs.at(2)*((X2-normConstants.at(4*numCoeffs+2)))//normConstants.at(5*numCoeffs+2))
++BGPolyCoeffs.at(3)*((Y2-normConstants.at(4*numCoeffs+3)))//normConstants.at(5*numCoeffs+3))
++BGPolyCoeffs.at(4)*((XY-normConstants.at(4*numCoeffs+4)))//normConstants.at(5*numCoeffs+4))
 #if ORDER>2
-+BGPolyCoeffs.at(5)*((X3 -normConstants.at(4*numCoeffs+5))/normConstants.at(5*numCoeffs+5))
-+BGPolyCoeffs.at(6)*((X2Y-normConstants.at(4*numCoeffs+6))/normConstants.at(5*numCoeffs+6))
-+BGPolyCoeffs.at(7)*((XY2-normConstants.at(4*numCoeffs+7))/normConstants.at(5*numCoeffs+7))
-+BGPolyCoeffs.at(8)*((Y3 -normConstants.at(4*numCoeffs+8))/normConstants.at(5*numCoeffs+8))
++BGPolyCoeffs.at(5)*((X3 -normConstants.at(4*numCoeffs+5)))//normConstants.at(5*numCoeffs+5))
++BGPolyCoeffs.at(6)*((X2Y-normConstants.at(4*numCoeffs+6)))//normConstants.at(5*numCoeffs+6))
++BGPolyCoeffs.at(7)*((XY2-normConstants.at(4*numCoeffs+7)))//normConstants.at(5*numCoeffs+7))
++BGPolyCoeffs.at(8)*((Y3 -normConstants.at(4*numCoeffs+8)))//normConstants.at(5*numCoeffs+8))
 #endif
 #if ORDER>3
-+BGPolyCoeffs.at(9) *((X4   -normConstants.at(4*numCoeffs+9))/normConstants.at(5*numCoeffs+9))
-+BGPolyCoeffs.at(10)*((X3Y -normConstants.at(4*numCoeffs+10))/normConstants.at(5*numCoeffs+10))
-+BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11))
-+BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12))
-+BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13))
-+imMeans.at(2)
++BGPolyCoeffs.at(9) *((X4   -normConstants.at(4*numCoeffs+9)))//normConstants.at(5*numCoeffs+9))
++BGPolyCoeffs.at(10)*((X3Y -normConstants.at(4*numCoeffs+10)))//normConstants.at(5*numCoeffs+10))
++BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11)))//normConstants.at(5*numCoeffs+11))
++BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12)))//normConstants.at(5*numCoeffs+12))
++BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13)))//normConstants.at(5*numCoeffs+13))
+//+imMeans.at(2)
 #endif
     ;
     IndexVector.push_back( currentIndex );
@@ -2037,7 +2136,7 @@ int main(int argc, char *argv[])
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
-  US3ImageType::Pointer inputImage = ReadITKImage<US3ImageType>( inputImageName );
+  US3ImageType::Pointer inputImage = ReadITKImageScifio<US3ImageType>( inputImageName );
   itk::SizeValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
   itk::SizeValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
@@ -2074,6 +2173,7 @@ int main(int argc, char *argv[])
   if( lowNoiseThr ) 
     upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
+ /* 
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -2087,23 +2187,24 @@ int main(int argc, char *argv[])
   {
     US2ImageType::Pointer currentSlice = GetTile( inputImage, (itk::SizeValueType)i );
     //Median filter for each slice to remove thermal noise
-    /*MedianFilterType::Pointer medFilter = MedianFilterType::New();
-    medFilter->SetInput( currentSlice );
-    medFilter->SetRadius( 5 );
-    try
-    {
-      medFilter ->Update(); 
-    }
-    catch( itk::ExceptionObject & excep )
-    {
-      std::cerr << "Exception caught median filter!" << excep << std::endl;
-      exit (EXIT_FAILURE);
-    }
-    US2ImageType::Pointer medFiltIm = medFilter->GetOutput();*/
+    //MedianFilterType::Pointer medFilter = MedianFilterType::New();
+    //medFilter->SetInput( currentSlice );
+    //medFilter->SetRadius( 5 );
+    //try
+    //{
+    //  medFilter ->Update(); 
+    //}
+    //catch( itk::ExceptionObject & excep )
+    //{
+    // std::cerr << "Exception caught median filter!" << excep << std::endl;
+    //  exit (EXIT_FAILURE);
+    //}
+    //US2ImageType::Pointer medFiltIm = medFilter->GetOutput();
     US2ImageType::Pointer medFiltIm = currentSlice; //No median filter
 
     medFiltIm->Register();
     medFiltImages.at(i) = medFiltIm;
+  }
     //Allocate space for costs
     CostImageType::SizeType size;
     size[0] = numRow; size[1] = numCol;
@@ -2140,7 +2241,6 @@ int main(int argc, char *argv[])
 #else
   				autoFlourCostsBG, flourCostsBG, valsPerBin );
 #endif //DEBUG_RESCALING_N_COST_EST
-//} //End scoping for noise thresholded image
 
 #ifdef DEBUG_RESCALING_N_COST_EST
   std::string OutFiles1 = nameTemplate + "costImageF.nrrd";
@@ -2196,14 +2296,29 @@ int main(int argc, char *argv[])
   flourCostsBG.clear();
 
   std::cout<<std::endl<<std::flush;
+// ************************ //Removed for debugging*/
+  std::string labelImageName = "/data/kedar/sim/ht/sim_label.tif";
+  UC3ImageType::Pointer labelImage = ReadITKImage<UC3ImageType>( labelImageName );
+  std::cout<<"Label Image Size: "<<labelImage->GetLargestPossibleRegion().GetSize()[0]
+    <<" "<<labelImage->GetLargestPossibleRegion().GetSize()[1]
+    <<" "<<labelImage->GetLargestPossibleRegion().GetSize()[2]<<"\n";
 
+  labelImage->Register();
+  std::cout<<"Label Image read\n";
 #ifdef DEBUG_THREE_LEVEL_LABELING
   std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
   std::string labelImageName = nameTemplate + "label.tif";
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 #endif //DEBUG_THREE_LEVEL_LABELING
+  std::vector< CostImageType::Pointer > avgImsVec;
+  US2ImageType::Pointer BG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf000.tif" );
+  US2ImageType::Pointer AF_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf001.tif" );
+  US2ImageType::Pointer FG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf002.tif" );
+  avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( FG_US ) );
+  avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( AF_US ) );
+  avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( BG_US ) );
 
-  std::cout<<"Computing mean Images\n"<<std::flush;
+/*  std::cout<<"Computing mean Images\n"<<std::flush;
   std::vector< CostImageType::Pointer > avgImsVec = 
 	ComputeMeanImages( labelImage, medFiltImages, numThreads, useSingleLev );
 
@@ -2220,7 +2335,7 @@ int main(int argc, char *argv[])
     exit( EXIT_FAILURE );
   }
   medFiltImages.clear();
-
+*/
 //******************
 //  std::string labelImageName = nameTemplate + "label.tif";
 //  std::string flAvgName = nameTemplate + "flAvg.tif";
