@@ -61,8 +61,8 @@
 #include <mlpack/methods/lars/lars.hpp>
 #include <mlpack/methods/linear_regression/linear_regression.hpp>
 
-#define WinSz 64	//Histogram computed on this window
-#define CWin  8		//This is half the inner window and must be a divisor of WinSz
+#define WinSz 128	//Histogram computed on this window
+#define CWin  16	//This is half the inner window and must be a divisor of WinSz
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
@@ -2010,17 +2010,17 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
 
 #ifdef DEBUG_CORRECTION_SURFACES
   std::cout<<"The min and maxes for the surfaces are:"<<iterTemplate<<"\n"<<
-  "flMin="<<flMinSurface<<"\t"<<"flMax"<<flMaxSurface<<"\n"<<
-  "AFMin="<<AFMinSurface<<"\t"<<"AFMax"<<AFMaxSurface<<"\n"<<
-  "BGMin="<<BGMinSurface<<"\t"<<"BGMax"<<BGMaxSurface<<"\n";
-  std::string flSurfName = nameTemplate+iterTemplate+"FlSurface.tif";
+  "flMin="<<flMinSurface<<"\tflMax"<<flMaxSurface<<"\n"<<
+  "AFMin="<<AFMinSurface<<"\tAFMax"<<AFMaxSurface<<"\n"<<
+  "BGMin="<<BGMinSurface<<"\tBGMax"<<BGMaxSurface<<"\n";
+  std::string flSurfName = nameTemplate+iterTemplate+"flSurface.tif";
   std::string AFSurfName = nameTemplate+iterTemplate+"AFSurface.tif";
   std::string BGSurfName = nameTemplate+iterTemplate+"BGSurface.tif";
   std::cout<<"Writing correction surfaces\n";
 if( !useSingleLev )
 {
-  CastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
-  CastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
 }
   RescaleCastNWriteImage<CostImageType,US2ImageType>(BGSurf,BGSurfName);
 #endif //DEBUG_CORRECTION_SURFACES
@@ -2264,7 +2264,7 @@ int main(int argc, char *argv[])
   std::string labelImageName = nameTemplate + "label.tif";
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 #endif //DEBUG_THREE_LEVEL_LABELING
- //Debugging code to replace fuunctiono ComputeMeanImages
+ //Debugging code to replace function ComputeMeanImages
 /*std::vector< CostImageType::Pointer > avgImsVec;
   US2ImageType::Pointer BG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_BGAvg.tif" );
   US2ImageType::Pointer AF_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_AFAvg.tif" );
@@ -2274,8 +2274,8 @@ int main(int argc, char *argv[])
   avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( BG_US ) );
 */
   std::cout<<"Computing mean Images\n"<<std::flush;
-  std::vector< CostImageType::Pointer > avgImsVec = 
-	ComputeMeanImages( labelImage, medFiltImages, numThreads, useSingleLev );
+  std::vector< CostImageType::Pointer > avgImsVec 
+	= ComputeMeanImages( labelImage, medFiltImages, numThreads, useSingleLev );
 
   try
   {
@@ -2316,10 +2316,10 @@ int main(int argc, char *argv[])
   std::string BGAvgName = nameTemplate + "BGAvg.tif";
   if( !useSingleLev)
 {
-  RescaleCastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
-  RescaleCastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
 }
-  RescaleCastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
+  CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
 #endif //DEBUG_MEAN_PROJECTIONS
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
@@ -2342,8 +2342,8 @@ int main(int argc, char *argv[])
 
   while( delta>IterThresh && iterCount<MaxIter )
   {
-    std::vector< CostImageType::Pointer > avgImsVecIter = 
-	ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
+    std::vector< CostImageType::Pointer > avgImsVecIter
+	= ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
     std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
 
     //Make pointers for the flour, autoflour n bg avg images
