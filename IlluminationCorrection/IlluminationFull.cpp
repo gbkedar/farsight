@@ -16,8 +16,9 @@
 
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
-//#define DEBUG_THREE_LEVEL_LABELING
-//#define DEBUG_MEAN_PROJECTIONS
+#define DEBUG_THREE_LEVEL_LABELING
+#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_ELASTIC_NETS
 #define DEBUG_CORRECTION_SURFACES
 #define NO_GRAPH_CUTS
 
@@ -58,6 +59,7 @@
 
 #include <mlpack/core.hpp>
 #include <mlpack/methods/lars/lars.hpp>
+#include <mlpack/methods/linear_regression/linear_regression.hpp>
 
 #define WinSz 64	//Histogram computed on this window
 #define CWin  8		//This is half the inner window and must be a divisor of WinSz
@@ -70,11 +72,12 @@
 #define ORDER 4		//Order of the polynomial 2-4
 #define numCoeffs 14	//((ORDER+1)*(ORDER+2)/2)-1 Compute and enter!
 #define useCholesky true//Use Cholesky decomposition in ARMA
-#define MaxIter 1	//Maximum number of iterations
+#define MaxIter 3	//Maximum number of iterations
 #define IterThresh 0.01 //The smallest max-min that is needed to run an iteration
 #define LowerNoiseThr 14000 //Noise threshold should be at least this value
-#define MY_EPS 1.8E-10  //Defining a threshold for double precision
-#define L2THR 0.1	//Min accuracy with which L2 condition in Regression should be satisfied
+#define MY_EPS 1.8E-10  //Defining a a very loose threshold change in values for diff L1 constraints
+#define L2THR 1		//Minimum L2 norm to be achieved 
+#define L2MINTHR 0.1	//Min accuracy with which L2 condition in Regression should be satisfied
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -92,8 +95,8 @@ std::string nameTemplate;
 //Stores the current iter as a string for debugging outputs
 std::string iterTemplate; 
 
-double lambda1start = 32768; //Kept arbitrarily large
-double lambda2start = 32768; //Kept arbitrarily large
+double lambda1start = 1; 
+double lambda2start = 1; 
 itk::SizeValueType poissonCompsRepeated = 0;
 itk::SizeValueType poissonCompsFailed   = 0;
 
@@ -1439,119 +1442,189 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     mlpack::regression::LARS lars( useCholesky, lambda1Cur, lambda2Cur );
     arma::vec beta;
     lars.Regress( matX, matY, beta, true );
-    for( int j=0;j<numCoeffs; ++j )
-      coeffsParallel.at(i).at(j) = beta(j,0);
     normsPar.at(i) = arma::norm( beta, 2);
-//#pragma omp critical
-//{
-//  std::cout<< i << "\t";
-//  if( task==1 ) std::cout<<"L1="<<lambda1Cur<<"\n";
-//  if( task==2 ) std::cout<<"L2="<<lambda2Cur<<"\t"<<"L2Norn="<<normsPar.at(i)<<"\n";
-//  if( task==3 ) std::cout<<"L2="<<lambda2Cur<<"\t"<<"L2Norn="<<normsPar.at(i)<<"\n";
-//  beta.t().print();
-//}
+    for( itk::SizeValueType j=0; j<numCoeffs; ++j )
+      coeffsParallel.at(i).at(j)=beta(j,0);
+#ifdef DEBUG_ELASTIC_NETS
+#pragma omp critical
+  if( task>0 )
+{
+  std::cout<< i << "\t";
+  std::cout<<"L1="<<lambda1Cur<<"\t"<<"L2="<<lambda2Cur<<"\t"
+	<<"L2Norm="<<normsPar.at(i)<<"\n";
+  beta.t().print();
+}
+#endif //DEBUG_ELASTIC_NETS
   }
   int firstGoodVal = -1;
   if( task==1 )
-  { //Loosen L1 constraints till all the variables are included
-    for( int i=0;i<coeffsParallel.size(); ++i )
+  { //Loosen L1 constraints till all the variables are included and only L2 constraint is active
+    for( itk::SizeValueType i=0;i<coeffsParallel.size(); ++i )
     {
       unsigned zeroCount = 0;
-      for( int j=0; j<numCoeffs; ++j )
+      for( itk::SizeValueType j=0; j<coeffsParallel.at(i).size(); ++j )
       {
 	if( std::abs(coeffsParallel.at(i).at(j))<MY_EPS )
 	  ++zeroCount;
       }
       if( !zeroCount )
       {
-	firstGoodVal = i;
-	lambda1 /= pow( 2, ((double)i) );
-	//std::cout<<"L1 set to "<<lambda1start<<std::endl;
-	break;
+	bool vecCompareSame = true;
+	if( i<(coeffsParallel.size()-1) )
+	{//If only L2 constraint is active the coefficients should remain same with loosening L1
+	  for( itk::SizeValueType j=0; j<coeffsParallel.at(i).size(); ++j )
+	    if( std::abs( ( coeffsParallel.at(i).at(j)-coeffsParallel.at(i+1).at(j) )/
+	        coeffsParallel.at(i).at(j) ) >= 0.1 )
+	    {
+	      vecCompareSame = false;
+	      break;
+	    }
+	}
+	else vecCompareSame = false; //If it is the last in the current paralle set continue
+	if( vecCompareSame )
+	{ //Task 1 is done
+	  firstGoodVal = i;
+	  lambda1 /= pow( 2, ((double)i) );
+	  task=2;
+#ifdef DEBUG_ELASTIC_NETS
+	  std::cout<<i<<" L1 set to "<<lambda1<<std::endl;
+#endif //DEBUG_ELASTIC_NETS
+	  break;
+	}
       }
     }
     if( firstGoodVal<0 )
     {
-      lambda1 /= pow( 2, ((double)numCoeffsPar) );
-      //std::cout<<"Loosening L1 constraints to Lambda 1 ="<<lambda1<<"\n";
+      lambda1 /= pow( 2, ((double)(numCoeffsPar-2)) );
+#ifdef DEBUG_ELASTIC_NETS
+      std::cout<<"Loosening L1 constraints to Lambda 1 ="<<lambda1<<"\n";
+#endif //DEBUG_ELASTIC_NETS
       Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 1 );
       return;
     }
   }
   if( firstGoodVal>-1 )
   { //Adjust L2 constraints
-    if( normsPar.at(firstGoodVal)>1.0 )
+    if( normsPar.at(firstGoodVal)>L2THR )
     {
-      lambda2 *= pow( 2, ((double)(numCoeffsPar-1)) );
-      //std::cout<<"Tightening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+      lambda2 *= pow( 2, ((double)(numCoeffsPar-2)) );
+#ifdef DEBUG_ELASTIC_NETS
+      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2<<"\n";
+#endif //DEBUG_ELASTIC_NETS
       Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
     }
     else
     {
-      lambda2 /= pow( 2, ((double)(numCoeffsPar-1)) );
-      //std::cout<<"Loosening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+#ifdef DEBUG_ELASTIC_NETS
+      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2<<"\n";
+#endif //DEBUG_ELASTIC_NETS
       Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
     }
     return;
   }
   if( task==2 )
-  {
-    if( !(normsPar.at(0)<1.0 && normsPar.at(0)>1.0) )
-    { //Search for the range in which L2 are around 1
+  { //Adjust L2 Parmeters till  L2norm of coeffs are around 1.0
+    if( (normsPar.at(0)<L2THR && normsPar.at(numCoeffsPar-1)>L2THR) )
+    { 
       for( itk::SizeValueType i=1; i<normsPar.size(); ++i )
       {
 	if( normsPar.at(i-1)<1.0 && normsPar.at(i)>1.0 )
+	{
 	  lambda2 /= pow( 2, ((double)i) );
+#ifdef DEBUG_ELASTIC_NETS
+	  std::cout<<"L2 is near Lambda 2 ="<<lambda2<<"\n";
+#endif //DEBUG_ELASTIC_NETS
+	}
       }
     }
     else
     {
-      if( normsPar.at(0)>1.0 )
+      if( normsPar.at(0)>L2THR )
       {
-	lambda2 *= pow( 2, ((double)(numCoeffsPar-1)) );
-	//std::cout<<"Tightening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+	lambda2 *= pow( 2, ((double)(numCoeffsPar-2)) );
+#ifdef DEBUG_ELASTIC_NETS
+	std::cout<<"Tightening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+#endif //DEBUG_ELASTIC_NETS
 	Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
       }
       else
       {
-	lambda2 /= pow( 2, ((double)(numCoeffsPar-1)) );
-	//std::cout<<"Loosening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+	lambda2 /= pow( 2, ((double)(numCoeffsPar-2)) );
+#ifdef DEBUG_ELASTIC_NETS
+	std::cout<<"Loosening L2 constraints to Lambda 2 ="<<lambda2<<"\n";
+#endif //DEBUG_ELASTIC_NETS
 	Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
       }
       return;
     }
-//    std::cout<<"Searching with Lambda 1 lower bound is:"<<lambda1
-//	<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
+#ifdef DEBUG_ELASTIC_NETS
+    std::cout<<"Searching with Lambda 1:"<<lambda1<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
+#endif //DEBUG_ELASTIC_NETS
     spacing = (lambda2*2-lambda2)/(numCoeffsPar-1);
     Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing );
     return;
   }
-  if( task==3 )
+  if( task==3 ) //The L2 constrained solution is still not close enough to the threshold tighten bounds
     for( itk::SizeValueType i=1; i<coeffsParallel.size(); ++i )
-      if( normsPar.at(i)<1.0 )
+      if( normsPar.at(i)<L2THR )
       {
-	if( (normsPar.at(i)-1.0) > L2THR )
+	if( ( (normsPar.at(i-1)-L2THR) > L2MINTHR ) && ( spacing>MY_EPS ) )
 	{
 	  lambda2 = lambda2+spacing*(i-1);
 	  spacing /= (numCoeffsPar-1);
-//	  std::cout<<"Searching with Lambda 1 lower bound is:"<<lambda1
-//		<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
+#ifdef DEBUG_ELASTIC_NETS
+    std::cout<<"Searching with Lambda 1:"<<lambda1<<"\tLambda 2 lower bound is:"<<lambda2
+	<<"\t Current Spacing is:"<<spacing<<std::endl;
+#endif //DEBUG_ELASTIC_NETS
 	  Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing );
 	  return;
 	}
 	else
-	{
-//	  std::cout<<"Lambda 2 is:"<<lambda2<<" L2norm is:"<<normsPar.at(i-1)<<"\n";
+	{ //Accepatable solution found
+	  for( int j=0;j<numCoeffs; ++j )
+	    outCoeffs.at(j) = coeffsParallel.at(i).at(j);
+#ifdef DEBUG_ELASTIC_NETS
+	  std::cout<<"Lambda 2 is:"<<lambda2<<" L2norm is:"<<normsPar.at(i-1)<<"\n";
+#endif //DEBUG_ELASTIC_NETS
 	  break;
 	}
       }
+
   //Compute plain regression error estimate
+//  mlpack::regression::LinearRegression lr( matX, matY );
+//  arma::vec parameters = lr.Parameters();
+//  arma::vec predictions;
+//  lr.Predict(matX, predictions);
+//  arma::mat errorVec = predictions-matY;
+//  double regressionErr = arma::norm( errorVec, 2);
+//  std::cout<<"Least squares regression error:"<<regressionErr<<std::endl;
+//  //parameters.t().print();
+
   //Compute current elastic net estimate
-  //Tighten L1 and pick a (manual?) threshold for reduction is RSS
-  
-  lambda1start = lambda1;
-  lambda2start = lambda2;
-  if(1) exit(1); //Delete when done *****************************
+  arma::mat coeffs( outCoeffs.size(), 1 );
+  for( int j=0;j<numCoeffs; ++j )
+    coeffs(j,0) = outCoeffs.at(j);
+  bool repeat = true;
+  while( repeat )
+  {
+    //Tighten L1 and pick a reduction is RSS?--Check if theorems from regression apply
+#ifdef DEBUG_ELASTIC_NETS
+    std::cout<< matX.n_rows << " " << matX.n_cols << " " << coeffs.n_rows << " "<< coeffs.n_cols
+	<< " are the matrix and col sizes for RSS computation\n"
+	<< matY.n_rows << " " << matY.n_cols << std::flush;
+#endif //DEBUG_ELASTIC_NETS
+    arma::mat predictions = matX.t()*coeffs;
+    predictions -= matY;
+    double currentRSS = arma::norm( predictions, 2);
+    std::cout<<"Current RSS:"<<currentRSS<<"\n";
+    //Add more code here
+    repeat = false;
+  }
+#ifdef DEBUG_ELASTIC_NETS
+  std::cout << "The output coefficients are: "; coeffs.t().print();
+#endif //DEBUG_ELASTIC_NETS
+  lambda1start = pow( 2, ( std::ceil( std::log( lambda1 ) / std::log( 2 ) ) ) );
+  lambda2start = pow( 2, ( std::ceil( std::log( lambda1 ) / std::log( 2 ) ) ) );
   return;
 }
 
@@ -1572,7 +1645,7 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
   itk::SizeValueType countFail=0;
   //Compute valid indices and means & 2-norms
   double XMean=0, YMean=0, X2Mean=0, Y2Mean=0, XYMean=0, ImValsMean=0,
-	XNorm=0, YNorm=0, X2Norm=0, Y2Norm=0, XYNorm=0//, ImValsNorm=0
+	XNorm=0, YNorm=0, X2Norm=0, Y2Norm=0, XYNorm=0, ImValsNorm=0
 #if ORDER>2
 	, X3Mean=0, X2YMean=0, XY2Mean=0, Y3Mean=0
 	, X3Norm=0, X2YNorm=0, XY2Norm=0, Y3Norm=0
@@ -1587,6 +1660,7 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
   {
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
+	ImVals.at(i) = ImVals.at(i) ? log( ImVals.at(i) ) : 0; //Changing to log later
 	XMean+=X.at(i); YMean+=Y.at(i); X2Mean+=X2.at(i); Y2Mean+=Y2.at(i); XYMean+=XY.at(i);
 	ImValsMean+=ImVals.at(i);
 #if ORDER>2
@@ -1611,10 +1685,10 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
 	X.at(i)-=XMean; Y.at(i)-=YMean; X2.at(i)-=X2Mean; Y2.at(i)-=Y2Mean; XY.at(i)-=XYMean;
-	ImVals.at(i)-=ImValsMean;
+	ImVals.at(i) -= ImValsMean;
 	XNorm+=(X.at(i)*X.at(i)); YNorm+=(Y.at(i)*Y.at(i)); X2Norm+=(X2.at(i)*X2.at(i));
 	Y2Norm+=(Y2.at(i)*Y2.at(i)); XYNorm+=(XY.at(i)*XY.at(i));
-	//ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
+	ImValsNorm+=(ImVals.at(i)*ImVals.at(i));
 #if ORDER>2
 	X3.at(i)-=X3Mean; X2Y.at(i)-=X2YMean; XY2.at(i)-=XY2Mean; Y3.at(i)-=Y3Mean;
 	X3Norm+=(X3.at(i)*X3.at(i)); X2YNorm+=(X2Y.at(i)*X2Y.at(i)); XY2Norm+=(XY2.at(i)*XY2.at(i));
@@ -1629,7 +1703,7 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
   }
 
   XNorm=sqrt(XNorm); YNorm=sqrt(YNorm); X2Norm=sqrt(X2Norm); Y2Norm=sqrt(Y2Norm); XYNorm=sqrt(XYNorm);
-  //ImValsNorm=sqrt(ImValsNorm);
+  ImValsNorm=sqrt(ImValsNorm);
 #if ORDER>2
   X3Norm=sqrt(X3Norm); X2YNorm=sqrt(X2YNorm); XY2Norm=sqrt(XY2Norm); Y3Norm=sqrt(Y3Norm);
 #endif
@@ -1662,14 +1736,15 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
 
   arma::mat matX( numCoeffs, ImVals.size()-countFail );
   arma::mat matY( ImVals.size()-countFail, 1 );
+  std::cout<<"Norm of predictor before scaling:"<<ImValsNorm<<std::endl;
 
-  for( itk::IndexValueType i=0,j=0; i<ImVals.size(); ++i )
+  for( itk::SizeValueType i=0,j=0; i<ImVals.size(); ++i )
   {
     if( ImVals.at(i)<std::numeric_limits<unsigned short>::max() )
     {
 	X.at(i)/=XNorm; Y.at(i)/=YNorm; X2.at(i)/=X2Norm; Y2.at(i)/=Y2Norm; XY.at(i)/=XYNorm;
 	matX(0,j)=X.at(i); matX(1,j)=Y.at(i); matX(2,j)=X2.at(i); matX(3,j)=Y2.at(i); matX(4,j)=XY.at(i);
-	//ImVals.at(i)/=ImValsNorm;
+	ImVals.at(i)/=ImValsNorm;
 	matY(j,0)=ImVals.at(i);
 #if ORDER>2
 	X3.at(i)/=X3Norm; X2Y.at(i)/=X2YNorm; XY2.at(i)/=XY2Norm; Y3.at(i)/=Y3Norm;
@@ -1684,13 +1759,13 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
     }
   }
   Regresss( matX, matY, outCoeffs, numThreads, lambda1start, lambda2start, 1 );
-  return ImValsMean;
+  return ImValsNorm;
 }
 
 void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer AFAvgIm,
   CostImageType::Pointer BGAvgIm, std::vector<double> &flPolyCoeffs,
   std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
-  std::vector<double> &normConstants, std::vector<double> &imMeans,
+  std::vector<double> &normConstants, std::vector<double> &imNorms,
   int numThreads, int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
@@ -1727,7 +1802,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
   }
   if( !useSingleLev )
 {
-  imMeans.at(0) = RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants,
+  imNorms.at(0) = RunRegression( X, Y, X2, Y2, XY, FlVals, normConstants,
   				0 //Idex to store the normalization consts
 #if ORDER>2
 				, X3, X2Y, XY2, Y3
@@ -1736,7 +1811,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 				, X4, X3Y, X2Y2, XY3, Y4
 #endif
 		, flPolyCoeffs, numThreads );
-  imMeans.at(1) = RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants,
+  imNorms.at(1) = RunRegression( X, Y, X2, Y2, XY, AFVals, normConstants,
   				2*numCoeffs //Index to store the normalization consts
 #if ORDER>2
 				, X3, X2Y, XY2, Y3
@@ -1746,7 +1821,7 @@ void ComputePolynomials( CostImageType::Pointer flAvgIm, CostImageType::Pointer 
 #endif
 				, AFPolyCoeffs, numThreads );
 }
-  imMeans.at(2) = RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants,
+  imNorms.at(2) = RunRegression( X, Y, X2, Y2, XY, BGVals, normConstants,
   				4*numCoeffs //Idex to store the normalization consts
 #if ORDER>2
 				, X3, X2Y, XY2, Y3
@@ -1765,7 +1840,7 @@ struct IndexStructType
 void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
 	std::vector< IndexStructType > &IndexVector, std::vector<double> &normConstants,
 	std::vector<double> &flPolyCoeffs, std::vector<double> &AFPolyCoeffs,
-	std::vector<double> &BGPolyCoeffs, std::vector<double> &imMeans )
+	std::vector<double> &BGPolyCoeffs, std::vector<double> &imNorms )
 {
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType > IterType3d;
   US3ImageType::SizeType size;
@@ -1801,67 +1876,73 @@ void GetSurfaceForIndices( US3ImageType::Pointer inputImage,
     double XY3  = currentIndex.X*Y3;
     double Y4   = Y2*Y2;
 #endif
-    currentIndex.FlVals = flPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(0)))
-			//normConstants.at(numCoeffs))
-+flPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(1)))//normConstants.at(numCoeffs+1))
-+flPolyCoeffs.at(2)*((X2-normConstants.at(2)))//normConstants.at(numCoeffs+2))
-+flPolyCoeffs.at(3)*((Y2-normConstants.at(3)))//normConstants.at(numCoeffs+3))
-+flPolyCoeffs.at(4)*((XY-normConstants.at(4)))//normConstants.at(numCoeffs+4))
+    currentIndex.FlVals = (
+    			flPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(0))
+			/normConstants.at(numCoeffs))
++flPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(1))/normConstants.at(numCoeffs+1))
++flPolyCoeffs.at(2)*((X2-normConstants.at(2))/normConstants.at(numCoeffs+2))
++flPolyCoeffs.at(3)*((Y2-normConstants.at(3))/normConstants.at(numCoeffs+3))
++flPolyCoeffs.at(4)*((XY-normConstants.at(4))/normConstants.at(numCoeffs+4))
 #if ORDER>2
-+flPolyCoeffs.at(5)*((X3 -normConstants.at(5)))//normConstants.at(numCoeffs+5))
-+flPolyCoeffs.at(6)*((X2Y-normConstants.at(6)))//normConstants.at(numCoeffs+6))
-+flPolyCoeffs.at(7)*((XY2-normConstants.at(7)))//normConstants.at(numCoeffs+7))
-+flPolyCoeffs.at(8)*((Y3 -normConstants.at(8)))//normConstants.at(numCoeffs+8))
++flPolyCoeffs.at(5)*((X3 -normConstants.at(5))/normConstants.at(numCoeffs+5))
++flPolyCoeffs.at(6)*((X2Y-normConstants.at(6))/normConstants.at(numCoeffs+6))
++flPolyCoeffs.at(7)*((XY2-normConstants.at(7))/normConstants.at(numCoeffs+7))
++flPolyCoeffs.at(8)*((Y3 -normConstants.at(8))/normConstants.at(numCoeffs+8))
 #endif
 #if ORDER>3
-+flPolyCoeffs.at(9) *((X4  -normConstants.at(9)))//normConstants.at(numCoeffs+9))
-+flPolyCoeffs.at(10)*((X3Y -normConstants.at(10)))//normConstants.at(numCoeffs+10))
-+flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11)))//normConstants.at(numCoeffs+11))
-+flPolyCoeffs.at(12)*((XY3 -normConstants.at(12)))//normConstants.at(numCoeffs+12))
-+flPolyCoeffs.at(13)*((Y4  -normConstants.at(13)))//normConstants.at(numCoeffs+13))
-//+imMeans.at(0)
++flPolyCoeffs.at(9) *((X4  -normConstants.at(9))/normConstants.at(numCoeffs+9))
++flPolyCoeffs.at(10)*((X3Y -normConstants.at(10))/normConstants.at(numCoeffs+10))
++flPolyCoeffs.at(11)*((X2Y2-normConstants.at(11))/normConstants.at(numCoeffs+11))
++flPolyCoeffs.at(12)*((XY3 -normConstants.at(12))/normConstants.at(numCoeffs+12))
++flPolyCoeffs.at(13)*((Y4  -normConstants.at(13))/normConstants.at(numCoeffs+13))
+) *
+imNorms.at(0)
 #endif
 	;
-    currentIndex.AFVals = AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs)))
-			//normConstants.at(3*numCoeffs))
+    currentIndex.AFVals = (
+			AFPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(2*numCoeffs))
+			/normConstants.at(3*numCoeffs))
 +AFPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(2*numCoeffs+1))/normConstants.at(3*numCoeffs+1))
-+AFPolyCoeffs.at(2)*((X2-normConstants.at(2*numCoeffs+2)))//normConstants.at(3*numCoeffs+2))
-+AFPolyCoeffs.at(3)*((Y2-normConstants.at(2*numCoeffs+3)))//normConstants.at(3*numCoeffs+3))
-+AFPolyCoeffs.at(4)*((XY-normConstants.at(2*numCoeffs+4)))//normConstants.at(3*numCoeffs+4))
++AFPolyCoeffs.at(2)*((X2-normConstants.at(2*numCoeffs+2))/normConstants.at(3*numCoeffs+2))
++AFPolyCoeffs.at(3)*((Y2-normConstants.at(2*numCoeffs+3))/normConstants.at(3*numCoeffs+3))
++AFPolyCoeffs.at(4)*((XY-normConstants.at(2*numCoeffs+4))/normConstants.at(3*numCoeffs+4))
 #if ORDER>2
-+AFPolyCoeffs.at(5)*((X3 -normConstants.at(2*numCoeffs+5)))//normConstants.at(3*numCoeffs+5))
-+AFPolyCoeffs.at(6)*((X2Y-normConstants.at(2*numCoeffs+6)))//normConstants.at(3*numCoeffs+6))
-+AFPolyCoeffs.at(7)*((XY2-normConstants.at(2*numCoeffs+7)))//normConstants.at(3*numCoeffs+7))
-+AFPolyCoeffs.at(8)*((Y3 -normConstants.at(2*numCoeffs+8)))//normConstants.at(3*numCoeffs+8))
++AFPolyCoeffs.at(5)*((X3 -normConstants.at(2*numCoeffs+5))/normConstants.at(3*numCoeffs+5))
++AFPolyCoeffs.at(6)*((X2Y-normConstants.at(2*numCoeffs+6))/normConstants.at(3*numCoeffs+6))
++AFPolyCoeffs.at(7)*((XY2-normConstants.at(2*numCoeffs+7))/normConstants.at(3*numCoeffs+7))
++AFPolyCoeffs.at(8)*((Y3 -normConstants.at(2*numCoeffs+8))/normConstants.at(3*numCoeffs+8))
 #endif
 #if ORDER>3
-+AFPolyCoeffs.at(9) *((X4  -normConstants.at(2*numCoeffs+9)))//normConstants.at(3*numCoeffs+9))
-+AFPolyCoeffs.at(10)*((X3Y -normConstants.at(2*numCoeffs+10)))//normConstants.at(3*numCoeffs+10))
-+AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11)))//normConstants.at(3*numCoeffs+11))
-+AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12)))//normConstants.at(3*numCoeffs+12))
-+AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13)))//normConstants.at(3*numCoeffs+13))
-//+imMeans.at(1)
++AFPolyCoeffs.at(9) *((X4  -normConstants.at(2*numCoeffs+9))/normConstants.at(3*numCoeffs+9))
++AFPolyCoeffs.at(10)*((X3Y -normConstants.at(2*numCoeffs+10))/normConstants.at(3*numCoeffs+10))
++AFPolyCoeffs.at(11)*((X2Y2-normConstants.at(2*numCoeffs+11))/normConstants.at(3*numCoeffs+11))
++AFPolyCoeffs.at(12)*((XY3 -normConstants.at(2*numCoeffs+12))/normConstants.at(3*numCoeffs+12))
++AFPolyCoeffs.at(13)*((Y4  -normConstants.at(2*numCoeffs+13))/normConstants.at(3*numCoeffs+13))
+) *
+imNorms.at(1)
 #endif
 	;
-currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*numCoeffs))
+    currentIndex.BGVals = (
+			BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*numCoeffs))
 			/normConstants.at(5*numCoeffs))
 +BGPolyCoeffs.at(1)*((currentIndex.Y -normConstants.at(4*numCoeffs+1))/normConstants.at(5*numCoeffs+1))
-+BGPolyCoeffs.at(2)*((X2-normConstants.at(4*numCoeffs+2)))//normConstants.at(5*numCoeffs+2))
-+BGPolyCoeffs.at(3)*((Y2-normConstants.at(4*numCoeffs+3)))//normConstants.at(5*numCoeffs+3))
-+BGPolyCoeffs.at(4)*((XY-normConstants.at(4*numCoeffs+4)))//normConstants.at(5*numCoeffs+4))
++BGPolyCoeffs.at(2)*((X2-normConstants.at(4*numCoeffs+2))/normConstants.at(5*numCoeffs+2))
++BGPolyCoeffs.at(3)*((Y2-normConstants.at(4*numCoeffs+3))/normConstants.at(5*numCoeffs+3))
++BGPolyCoeffs.at(4)*((XY-normConstants.at(4*numCoeffs+4))/normConstants.at(5*numCoeffs+4))
 #if ORDER>2
-+BGPolyCoeffs.at(5)*((X3 -normConstants.at(4*numCoeffs+5)))//normConstants.at(5*numCoeffs+5))
-+BGPolyCoeffs.at(6)*((X2Y-normConstants.at(4*numCoeffs+6)))//normConstants.at(5*numCoeffs+6))
-+BGPolyCoeffs.at(7)*((XY2-normConstants.at(4*numCoeffs+7)))//normConstants.at(5*numCoeffs+7))
-+BGPolyCoeffs.at(8)*((Y3 -normConstants.at(4*numCoeffs+8)))//normConstants.at(5*numCoeffs+8))
++BGPolyCoeffs.at(5)*((X3 -normConstants.at(4*numCoeffs+5))/normConstants.at(5*numCoeffs+5))
++BGPolyCoeffs.at(6)*((X2Y-normConstants.at(4*numCoeffs+6))/normConstants.at(5*numCoeffs+6))
++BGPolyCoeffs.at(7)*((XY2-normConstants.at(4*numCoeffs+7))/normConstants.at(5*numCoeffs+7))
++BGPolyCoeffs.at(8)*((Y3 -normConstants.at(4*numCoeffs+8))/normConstants.at(5*numCoeffs+8))
 #endif
 #if ORDER>3
-+BGPolyCoeffs.at(9) *((X4   -normConstants.at(4*numCoeffs+9)))//normConstants.at(5*numCoeffs+9))
-+BGPolyCoeffs.at(10)*((X3Y -normConstants.at(4*numCoeffs+10)))//normConstants.at(5*numCoeffs+10))
-+BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11)))//normConstants.at(5*numCoeffs+11))
-+BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12)))//normConstants.at(5*numCoeffs+12))
-+BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13)))//normConstants.at(5*numCoeffs+13))
-//+imMeans.at(2)
++BGPolyCoeffs.at(9) *((X4   -normConstants.at(4*numCoeffs+9))/normConstants.at(5*numCoeffs+9))
++BGPolyCoeffs.at(10)*((X3Y -normConstants.at(4*numCoeffs+10))/normConstants.at(5*numCoeffs+10))
++BGPolyCoeffs.at(11)*((X2Y2-normConstants.at(4*numCoeffs+11))/normConstants.at(5*numCoeffs+11))
++BGPolyCoeffs.at(12)*((XY3 -normConstants.at(4*numCoeffs+12))/normConstants.at(5*numCoeffs+12))
++BGPolyCoeffs.at(13)*((Y4  -normConstants.at(4*numCoeffs+13))/normConstants.at(5*numCoeffs+13))
+) *
+imNorms.at(2)
 #endif
     ;
     IndexVector.push_back( currentIndex );
@@ -1869,127 +1950,15 @@ currentIndex.BGVals = BGPolyCoeffs.at(0)*((currentIndex.X-normConstants.at(4*num
   return;
 }
 
-bool flMax( const IndexStructType &a, const IndexStructType &b)
-{ return (a.FlVals > b.FlVals); }
-
-bool AFMax( const IndexStructType &a, const IndexStructType &b)
-{ return (a.AFVals > b.AFVals); }
-
-bool BGMax( const IndexStructType &a, const IndexStructType &b)
-{ return (a.BGVals > b.BGVals); }
-
 bool IndMin( const IndexStructType &a, const IndexStructType &b)
 { if( a.Y==b.Y ) return (a.X < b.X); else return (a.Y < b.Y); }
-
-double GetMinMaxFrom10PcInd( std::vector< IndexStructType > &IndexVector,
-	CostImageType::Pointer currentAvgIm, unsigned channel, bool flagMinMax )
-{
-  typedef itk::ImageRegionIterator< CostImageType > CostIterType;
-  double returnValue=0;
-  if( channel==0 && flagMinMax )
-  {
-    std::cout<<"Sorting FG. ";
-    std::sort( IndexVector.begin(), IndexVector.end(), flMax );
-  }
-  if( channel==1 && flagMinMax )
-  {
-    std::cout<<"Sorting AF. ";
-    std::sort( IndexVector.begin(), IndexVector.end(), AFMax );
-  }
-  if( channel==2 && flagMinMax )
-  {
-    std::cout<<"Sorting BG\n";
-    std::sort( IndexVector.begin(), IndexVector.end(), BGMax );
-  }
-  CostIterType costIter( currentAvgIm, currentAvgIm->GetLargestPossibleRegion() );
-  itk::IndexValueType count=MinMax;
-  if( flagMinMax )
-  {
-    for( itk::IndexValueType i = 0; i<MinMax; ++i )
-    {
-      CostImageType::IndexType index;
-      index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
-      costIter.SetIndex( index );
-      if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-      {
-	if( costIter.Get() )
-	{
-	  returnValue += log(costIter.Get());
-	}
-      }
-      else
-      {
-        --count;
-      }
-    }
-    //If there isn't enough sampling continue
-    if( count<(MinMax/2) )
-    {
-      itk::IndexValueType i=MinMax;
-      while( i<IndexVector.size() &&  (count<(MinMax/2)) )
-      {
-	CostImageType::IndexType index;
-	index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
-	costIter.SetIndex( index );
-	if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-	{
-	  if( costIter.Get() )
-	    returnValue += log(costIter.Get());
-	  ++count;
-	}
-	++i;
-      }
-    }
-  }
-  else
-  {
-    for( itk::IndexValueType i = IndexVector.size()-1; i>(IndexVector.size()-MinMax-1); --i )
-    {
-      CostImageType::IndexType index;
-      index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
-      costIter.SetIndex( index );
-      if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-      {
-	if( costIter.Get() )
-	{
-	  returnValue += log(costIter.Get());
-	}
-      }
-      else
-      {
-        --count;
-      }
-    }
-    //If there isn't enough sampling continue
-    if( count<(MinMax/2) )
-    {
-      itk::IndexValueType i=IndexVector.size()-MinMax-1;
-      while( i>=0 &&  (count<(MinMax/2)) )
-      {
-	CostImageType::IndexType index;
-	index[1] = IndexVector.at(i).X; index[0] = IndexVector.at(i).Y;
-	costIter.SetIndex( index );
-	if( costIter.Get()<std::numeric_limits<unsigned short>::max() )
-	{
-	  if( costIter.Get() )
-	    returnValue += log(costIter.Get());
-	  ++count;
-	}
-	--i;
-      }
-    }
-  }
-  if( returnValue )
-    returnValue /= ((double)count);
-  return returnValue;
-}
 
 double CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &AFPolyCoeffs, std::vector<double> &BGPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
 	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm,
-	std::vector<double> &imMeans, int numThreads, int useSingleLev )
+	std::vector<double> &imNorms, int numThreads, int useSingleLev )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > InputIterType;
@@ -2001,21 +1970,8 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
   itk::SizeValueType numSlices = size[2];
   std::vector< IndexStructType > IndexVector;
   GetSurfaceForIndices( inputImage, IndexVector, normConstants, flPolyCoeffs, AFPolyCoeffs,
-  			BGPolyCoeffs, imMeans );
-/*  double flMaxImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, true  );
-  double flMinImage = GetMinMaxFrom10PcInd( IndexVector, flAvgIm, 0, false );
-  double AFMaxImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, true  );
-  double AFMinImage = GetMinMaxFrom10PcInd( IndexVector, AFAvgIm, 1, false );
-  double BGMaxImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, true  );// Using the same rage as AF
-  double BGMinImage = GetMinMaxFrom10PcInd( IndexVector, BGAvgIm, 2, false );// Since BG is kinda noisy
-  //BGMaxImage = BGMinImage+(AFMaxImage-AFMinImage);
-  //double BGMinImage = AFMinImage;
-  double AvgRatio = (flMaxImage-flMinImage+AFMaxImage-AFMinImage+BGMaxImage-BGMinImage)/3.0;
-  if( useSingleLev )
-    AvgRatio = BGMaxImage-BGMinImage;
-  else
-    AvgRatio = (flMaxImage-flMinImage+AFMaxImage-AFMinImage+BGMaxImage-BGMinImage)/3.0;
-*/
+  			BGPolyCoeffs, imNorms );
+
   std::sort( IndexVector.begin(), IndexVector.end(), IndMin );
 
   //Rescale to between 0 and max-min for all three surfaces
@@ -2036,14 +1992,7 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
   if( (BGMaxSurface-BGMinSurface)>delta ) delta = BGMaxSurface-BGMinSurface;
   if( delta<IterThresh )
     return delta;
-/*double flRatio = std::abs( AvgRatio/(flMaxSurface-flMinSurface) );//(flMaxImage-flMinImage)/
-  double AFRatio = std::abs( AvgRatio/(AFMaxSurface-AFMinSurface) );//(AFMaxImage-AFMinImage)/
-  double BGRatio = std::abs( AvgRatio/(BGMaxSurface-BGMinSurface) );//(BGMaxImage-BGMinImage)/
-  std::cout<<"Fl: "<<flRatio<<" "<<(flMaxImage-flMinImage)
-	<<"\tAF: "<<AFRatio<<" "<<(AFMaxImage-AFMinImage)
-	<<"\tBG-"<<BGRatio<<" Im:"<<BGMaxImage<<", "<<BGMinImage<<" Surf:"<<BGMaxSurface<<", "<<BGMinSurface
-	<<"\nAVG Rat: "<<AvgRatio<<std::endl;
-*/CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
+  CostImageType::SizeType size2d; size2d[0] = size[0]; size2d[1] = size[1];
   CostImageType::Pointer flSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostImageType::Pointer AFSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
   CostImageType::Pointer BGSurf = CreateDefaultCoordsNAllocateSpace<CostImageType>( size2d );
@@ -2054,19 +2003,24 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
   {
     CostImageType::IndexType index; index[0] = IndexVector.at(i).Y; index[1] = IndexVector.at(i).X;
     flIter.SetIndex( index ); AFIter.SetIndex( index ); BGIter.SetIndex( index );
-    flIter.Set( (IndexVector.at(i).FlVals-flMinSurface) );//*flRatio );
-    AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface) );//*AFRatio );
-    BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface) );//*BGRatio );
+    flIter.Set( (IndexVector.at(i).FlVals-flMinSurface) );
+    AFIter.Set( (IndexVector.at(i).AFVals-AFMinSurface) );
+    BGIter.Set( (IndexVector.at(i).BGVals-BGMinSurface) );
   }
 
 #ifdef DEBUG_CORRECTION_SURFACES
+  std::cout<<"The min and maxes for the surfaces are:"<<iterTemplate<<"\n"<<
+  "flMin="<<flMinSurface<<"\t"<<"flMax"<<flMaxSurface<<"\n"<<
+  "AFMin="<<AFMinSurface<<"\t"<<"AFMax"<<AFMaxSurface<<"\n"<<
+  "BGMin="<<BGMinSurface<<"\t"<<"BGMax"<<BGMaxSurface<<"\n";
   std::string flSurfName = nameTemplate+iterTemplate+"FlSurface.tif";
   std::string AFSurfName = nameTemplate+iterTemplate+"AFSurface.tif";
   std::string BGSurfName = nameTemplate+iterTemplate+"BGSurface.tif";
+  std::cout<<"Writing correction surfaces\n";
 if( !useSingleLev )
 {
-  RescaleCastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
-  RescaleCastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
+  CastNWriteImage<CostImageType,US2ImageType>(flSurf,flSurfName);
+  CastNWriteImage<CostImageType,US2ImageType>(AFSurf,AFSurfName);
 }
   RescaleCastNWriteImage<CostImageType,US2ImageType>(BGSurf,BGSurfName);
 #endif //DEBUG_CORRECTION_SURFACES
@@ -2099,7 +2053,7 @@ if( !useSingleLev )
       if( labelIter.Get()==1 ) minusVal = AFIterPerThr.Get();
       if( labelIter.Get()==2 ) minusVal = flIterPerThr.Get();
       curPix -= minusVal;
-      curPix = std::floor(exp(curPix)+0.5);
+      curPix = floor(exp(curPix)+0.5);
       inputIter.Set( (US3ImageType::PixelType)curPix );
     }
   }
@@ -2173,7 +2127,7 @@ int main(int argc, char *argv[])
   if( lowNoiseThr ) 
     upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
- /* 
+
 #ifdef _OPENMP
   itk::MultiThreader::SetGlobalDefaultNumberOfThreads(1);
 #if _OPENMP >= 200805L
@@ -2204,7 +2158,7 @@ int main(int argc, char *argv[])
 
     medFiltIm->Register();
     medFiltImages.at(i) = medFiltIm;
-  }
+//  } //Remove brace after debug
     //Allocate space for costs
     CostImageType::SizeType size;
     size[0] = numRow; size[1] = numCol;
@@ -2296,29 +2250,30 @@ int main(int argc, char *argv[])
   flourCostsBG.clear();
 
   std::cout<<std::endl<<std::flush;
-// ************************ //Removed for debugging*/
-  std::string labelImageName = "/data/kedar/sim/ht/sim_label.tif";
+// ************************ //Removed for debugging
+/*std::string labelImageName = "/data/kedar/sim/ht/sim_label.tif";
   UC3ImageType::Pointer labelImage = ReadITKImage<UC3ImageType>( labelImageName );
   std::cout<<"Label Image Size: "<<labelImage->GetLargestPossibleRegion().GetSize()[0]
     <<" "<<labelImage->GetLargestPossibleRegion().GetSize()[1]
     <<" "<<labelImage->GetLargestPossibleRegion().GetSize()[2]<<"\n";
 
   labelImage->Register();
-  std::cout<<"Label Image read\n";
+  std::cout<<"Label Image read\n";*/
 #ifdef DEBUG_THREE_LEVEL_LABELING
   std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
   std::string labelImageName = nameTemplate + "label.tif";
   WriteITKImage<UC3ImageType>( labelImage, labelImageName );
 #endif //DEBUG_THREE_LEVEL_LABELING
-  std::vector< CostImageType::Pointer > avgImsVec;
-  US2ImageType::Pointer BG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf000.tif" );
-  US2ImageType::Pointer AF_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf001.tif" );
-  US2ImageType::Pointer FG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ShSurf002.tif" );
+ //Debugging code to replace fuunctiono ComputeMeanImages
+/*std::vector< CostImageType::Pointer > avgImsVec;
+  US2ImageType::Pointer BG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_BGAvg.tif" );
+  US2ImageType::Pointer AF_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_AFAvg.tif" );
+  US2ImageType::Pointer FG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_flAvg.tif" );
   avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( FG_US ) );
   avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( AF_US ) );
   avgImsVec.push_back( CastImage<US2ImageType,CostImageType>( BG_US ) );
-
-/*  std::cout<<"Computing mean Images\n"<<std::flush;
+*/
+  std::cout<<"Computing mean Images\n"<<std::flush;
   std::vector< CostImageType::Pointer > avgImsVec = 
 	ComputeMeanImages( labelImage, medFiltImages, numThreads, useSingleLev );
 
@@ -2335,7 +2290,7 @@ int main(int argc, char *argv[])
     exit( EXIT_FAILURE );
   }
   medFiltImages.clear();
-*/
+
 //******************
 //  std::string labelImageName = nameTemplate + "label.tif";
 //  std::string flAvgName = nameTemplate + "flAvg.tif";
@@ -2348,7 +2303,7 @@ int main(int argc, char *argv[])
 //******************
   std::vector<double> flPolyCoeffs(numCoeffs,0), AFPolyCoeffs(numCoeffs,0),
 			BGPolyCoeffs(numCoeffs,0), normConstants(2*3*numCoeffs,0);
-  std::vector<double> imMeans(3,0);
+  std::vector<double> imNorms(3,0);
 
   //Make pointers for the flour, autoflour n bg avg images
   CostImageType::Pointer flAvgIm, AFAvgIm, BGAvgIm;
@@ -2361,21 +2316,21 @@ int main(int argc, char *argv[])
   std::string BGAvgName = nameTemplate + "BGAvg.tif";
   if( !useSingleLev)
 {
-  CastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
-  CastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(flAvgIm,flAvgName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(AFAvgIm,AFAvgName);
 }
-  CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
+  RescaleCastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
 #endif //DEBUG_MEAN_PROJECTIONS
 
   std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
   ComputePolynomials( flAvgIm, AFAvgIm, BGAvgIm, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
-			normConstants, imMeans, numThreads, useSingleLev );
+			normConstants, imNorms, numThreads, useSingleLev );
   std::cout<<"Polynomials estimated\n"<<std::flush;
   for( itk::SizeValueType i=0; i<numCoeffs; ++i )
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   double delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
-	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imMeans, numThreads, useSingleLev );
+	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imNorms, numThreads, useSingleLev );
 //  std::vector< double > deltaVec;
 //  deltaVec.push_back( delta );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
@@ -2397,16 +2352,13 @@ int main(int argc, char *argv[])
     BGAvgImIt = avgImsVecIter.at(2);
 
     ComputePolynomials( flAvgImIt, AFAvgImIt, BGAvgImIt, flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs,
-			normConstants, imMeans, numThreads, useSingleLev );
+			normConstants, imNorms, numThreads, useSingleLev );
     std::cout<<"Polynomials estimated\n"<<std::flush;
     for( itk::SizeValueType i=0; i<numCoeffs; ++i )
       std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
     delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
-	clonedImage, labelImage, flAvgImIt, AFAvgImIt, BGAvgImIt, imMeans, numThreads, useSingleLev );
-
-    flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
-    avgImsVecIter.clear();
+	clonedImage, labelImage, flAvgImIt, AFAvgImIt, BGAvgImIt, imNorms, numThreads, useSingleLev );
 
     std::stringstream ss;
     ss << iterCount;
@@ -2424,7 +2376,11 @@ int main(int argc, char *argv[])
   CastNWriteImage<CostImageType,US2ImageType>(BGAvgIm,BGAvgName);
 #endif //DEBUG_MEAN_PROJECTIONS
 
+    flAvgImIt->UnRegister(); AFAvgImIt->UnRegister(); BGAvgImIt->UnRegister();
+    avgImsVecIter.clear();
+
     std::cout<<"Iteration:"<<++iterCount<<"\tCorrection delta:"<<delta<<std::endl;
+
 /*  deltaVec.push_back( delta );
     if( delta>IterThresh )
     {
