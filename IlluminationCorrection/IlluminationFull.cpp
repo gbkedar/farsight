@@ -1639,7 +1639,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 #ifdef DEBUG_ELASTIC_NETS
     std::cout<< matX.n_rows << " " << matX.n_cols << " " << coeffs.n_rows << " "<< coeffs.n_cols
 	<< " are the matrix and col sizes for RSS computation\n"
-	<< matY.n_rows << " " << matY.n_cols << std::flush;
+	<< matY.n_rows << " " << matY.n_cols << "\n" << std::flush;
 #endif //DEBUG_ELASTIC_NETS
     arma::mat predictions = matX.t()*coeffs;
     predictions -= matY;
@@ -1986,7 +1986,8 @@ double CorrectImages( std::vector<double> &flPolyCoeffs,
 	std::vector<double> &normConstants, US3ImageType::Pointer inputImage,
 	UC3ImageType::Pointer labelImage, CostImageType::Pointer flAvgIm,
 	CostImageType::Pointer AFAvgIm,	CostImageType::Pointer BGAvgIm,
-	std::vector<double> &imNorms, int numThreads, int useSingleLev )
+	std::vector<double> &imNorms, int numThreads, int useSingleLev,
+	US3ImageType::PixelType noiseThr )
 {
   typedef itk::ImageRegionIteratorWithIndex< CostImageType > CostIterType;
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > InputIterType;
@@ -2079,7 +2080,7 @@ if( !useSingleLev )
       double minusVal = 0;
       if( !labelIter.Get() ) minusVal = BGIterPerThr.Get();
       if( labelIter.Get()==1 ) minusVal = AFIterPerThr.Get();
-      if( labelIter.Get()==2 ) minusVal = flIterPerThr.Get();
+      if( labelIter.Get()==2 || (noiseThr<inputIter.Get()) ) minusVal = flIterPerThr.Get();
       curPix -= minusVal;
       curPix = floor(exp(curPix)+0.5);
       inputIter.Set( (US3ImageType::PixelType)curPix );
@@ -2358,7 +2359,8 @@ int main(int argc, char *argv[])
     std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
   double delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
-	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imNorms, numThreads, useSingleLev );
+	clonedImage, labelImage, flAvgIm, AFAvgIm, BGAvgIm, imNorms, numThreads, useSingleLev,
+	upperThreshold );
 //  std::vector< double > deltaVec;
 //  deltaVec.push_back( delta );
   flAvgIm->UnRegister(); AFAvgIm->UnRegister(); BGAvgIm->UnRegister();
@@ -2388,7 +2390,8 @@ int main(int argc, char *argv[])
       std::cout<<flPolyCoeffs.at(i)<<"\t"<<AFPolyCoeffs.at(i)<<"\t"<<BGPolyCoeffs.at(i)<<"\n"<<std::flush;
 
     delta = CorrectImages( flPolyCoeffs, AFPolyCoeffs, BGPolyCoeffs, normConstants,
-	clonedImage, labelImage, flAvgImIt, AFAvgImIt, BGAvgImIt, imNorms, numThreads, useSingleLev );
+	clonedImage, labelImage, flAvgImIt, AFAvgImIt, BGAvgImIt, imNorms, numThreads, useSingleLev,
+	upperThreshold );
 
     std::stringstream ss;
     ss << iterCount;
