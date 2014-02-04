@@ -18,7 +18,7 @@
 //#define NOISE_THR_DEBUG
 #define DEBUG_THREE_LEVEL_LABELING
 #define DEBUG_MEAN_PROJECTIONS
-//#define DEBUG_ELASTIC_NETS
+#define DEBUG_ELASTIC_NETS
 #define DEBUG_CORRECTION_SURFACES
 #define NO_GRAPH_CUTS
 
@@ -76,8 +76,9 @@
 #define IterThresh 0.01 //The smallest max-min that is needed to run an iteration
 #define LowerNoiseThr 14000 //Noise threshold should be at least this value
 #define MY_EPS 1.8E-10  //Defining a a very loose threshold change in values for diff L1 constraints
-#define L2THR 1		//Minimum L2 norm to be achieved 
-#define L2MINTHR 0.1	//Min accuracy with which L2 condition in Regression should be satisfied
+#define L2LowThr 1.0E-4 //Very little changes in the solution below this threshold in terms of sparsity
+#define L1LowThr 1.0E-4 //Very little changes in the solution below this threshold in terms of coeff
+#define L2IterThr 3	//Max number of times to refine L2 soln
 
 typedef unsigned short	USPixelType;
 typedef unsigned char	UCPixelType;
@@ -95,8 +96,10 @@ std::string nameTemplate;
 //Stores the current iter as a string for debugging outputs
 std::string iterTemplate; 
 
-double lambda1start = 1; 
-double lambda2start = 1; 
+double lambda1start = 1;//Seed for lambda 1 in the elastic nets 
+double lambda2start = 1;//Seed for lambda 2 in the elastic nets 
+double L2THR = 1.0;	//Minimum L2 norm to be achieved 
+double L2MINTHR = 0.1;	//Min accuracy with which L2 condition in Regression should be satisfied
 itk::SizeValueType poissonCompsRepeated = 0;
 itk::SizeValueType poissonCompsFailed   = 0;
 
@@ -1418,7 +1421,7 @@ std::vector< CostImageType::Pointer >
 }
 
 void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, int numThreads,
-		double lambda1, double lambda2, int task, double spacing = 0 )
+		double lambda1, double lambda2, int task, double spacing = 0, unsigned iter = 0 )
 {
   //Run many regression problems in parallel start by allocating space for output coeffs
   std::vector< std::vector< double > > coeffsParallel;
@@ -1467,7 +1470,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 	if( std::abs(coeffsParallel.at(i).at(j))<MY_EPS )
 	  ++zeroCount;
       }
-      if( !zeroCount )
+      if( !zeroCount || ( ( lambda1/pow( 2, ((double)i) ) ) < L1LowThr ) )
       {
 	bool vecCompareSame = true;
 	if( i<(coeffsParallel.size()-1) )
@@ -1480,8 +1483,8 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 	      break;
 	    }
 	}
-	else vecCompareSame = false; //If it is the last in the current paralle set continue
-	if( vecCompareSame )
+	else vecCompareSame = false; //If it is the last in the current parallel set continue
+	if( vecCompareSame || ( ( lambda1/pow( 2, ((double)i) ) ) < L1LowThr ) )
 	{ //Task 1 is done
 	  firstGoodVal = i;
 	  lambda1 /= pow( 2, ((double)i) );
@@ -1524,11 +1527,27 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   }
   if( task==2 )
   { //Adjust L2 Parmeters till  L2norm of coeffs are around 1.0
+    for( itk::SizeValueType i=0;i<coeffsParallel.size(); ++i )
+    {
+      unsigned zeroCount = 0;
+      for( itk::SizeValueType j=0; j<coeffsParallel.at(i).size(); ++j )
+      {
+	if( std::abs(coeffsParallel.at(i).at(j))<MY_EPS )
+	  ++zeroCount;
+      }
+      if( ( zeroCount && lambda1>L1LowThr ) &&
+	  ( ( lambda2/pow( 2,((double)(i))) ) > L2LowThr ) )
+      {
+	Regresss( matX, matY, outCoeffs, numThreads, lambda1,
+			lambda2/pow(2,((double)(i))), 1 );
+	return;
+      }
+    }
     if( (normsPar.at(0)<L2THR && normsPar.at(numCoeffsPar-1)>L2THR) )
     { 
       for( itk::SizeValueType i=1; i<normsPar.size(); ++i )
       {
-	if( normsPar.at(i-1)<1.0 && normsPar.at(i)>1.0 )
+	if( normsPar.at(i-1)<L2THR && normsPar.at(i)>L2THR )
 	{
 	  lambda2 /= pow( 2, ((double)i) );
 #ifdef DEBUG_ELASTIC_NETS
@@ -1539,6 +1558,8 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     }
     else
     {
+      if( (lambda2/pow(2,((double)(numCoeffsPar-1)))) > L2LowThr )
+      {
       if( normsPar.at(0)>L2THR )
       {
 	lambda2 *= pow( 2, ((double)(numCoeffsPar-2)) );
@@ -1556,19 +1577,26 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
 	Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
       }
       return;
+      }
+      else
+	lambda2 /= pow( 2, ((double)(numCoeffsPar-1)) );
     }
 #ifdef DEBUG_ELASTIC_NETS
     std::cout<<"Searching with Lambda 1:"<<lambda1<<"\tLambda 2 lower bound is:"<<lambda2<<std::endl;
 #endif //DEBUG_ELASTIC_NETS
     spacing = (lambda2*2-lambda2)/(numCoeffsPar-1);
-    Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing );
-    return;
+    if( lambda2>L2LowThr )
+    {
+      Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 3, spacing, 1 );
+      return;
+    }
+    else task = 3;
   }
   if( task==3 ) //The L2 constrained solution is still not close enough to the threshold tighten bounds
     for( itk::SizeValueType i=1; i<coeffsParallel.size(); ++i )
-      if( normsPar.at(i)<L2THR )
+      if( (normsPar.at(i)<L2THR) || (lambda2<L2LowThr) )
       {
-	if( ( (normsPar.at(i-1)-L2THR) > L2MINTHR ) && ( spacing>MY_EPS ) )
+	if( ( (normsPar.at(i-1)-L2THR) > L2MINTHR ) && ( spacing>MY_EPS ) && ( lambda2>L2LowThr ) )
 	{
 	  lambda2 = lambda2+spacing*(i-1);
 	  spacing /= (numCoeffsPar-1);
@@ -2342,6 +2370,8 @@ int main(int argc, char *argv[])
 
   while( delta>IterThresh && iterCount<MaxIter )
   {
+    L2THR *= 2;
+    L2MINTHR *= 2;
     std::vector< CostImageType::Pointer > avgImsVecIter
 	= ComputeMeanImages( labelImage, clonedImage, numThreads, useSingleLev, upperThreshold );
     std::cout<<"Mean Images computed! Estimating polynomials\n"<<std::flush;
