@@ -22,7 +22,7 @@ typedef itk::ImageFileWriter< Uchar2DImageType > ImageFileWriterType;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage MaxDim(Optional Set to 10000)\n";
+	    << " " << funcName << " InputImage MaxDim(Optional Set to 2000)\n";
 }
 
 template<typename InputImageType> typename InputImageType::Pointer
@@ -68,6 +68,7 @@ int main(int argc, char *argv[])
 			inputImage->GetLargestPossibleRegion().GetSize()[1] :
 			inputImage->GetLargestPossibleRegion().GetSize()[0];
   scaleFactor = scaleFactor/(double)largestDim;
+  std::cout<<"The scale factor is:"<<scaleFactor<<std::endl;
   const Ushort2DImageType::SpacingType& inputSpacing = inputImage->GetSpacing();
 
   CastFilterType::Pointer caster = CastFilterType::New();
