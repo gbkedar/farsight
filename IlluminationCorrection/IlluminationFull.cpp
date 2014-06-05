@@ -17,9 +17,9 @@
 //#define DEBUG_RESCALING_N_COST_EST
 //#define NOISE_THR_DEBUG
 #define DEBUG_THREE_LEVEL_LABELING
-#define DEBUG_MEAN_PROJECTIONS
+//#define DEBUG_MEAN_PROJECTIONS
 #define DEBUG_ELASTIC_NETS
-#define DEBUG_CORRECTION_SURFACES
+//#define DEBUG_CORRECTION_SURFACES
 #define NO_GRAPH_CUTS
 
 #include <vector>
@@ -450,7 +450,7 @@ void computePoissonParams( std::vector< double > &histogram,
   itk::SizeValueType min_i, max_i;
   if( firstPass )
   {
-    min_i = pc5;
+    min_i = pc10;
     max_i = pc85;
   }
   else
@@ -862,7 +862,6 @@ void ComputeCosts( int numThreads,
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
     std::vector< double > parameters( 5, 0 );
-    std::vector< double > histogram( NumBins, 0 );
     US2ImageType::IndexType prevStart; prevStart[0] = 0; prevStart[1] = 0;
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
@@ -872,6 +871,7 @@ void ComputeCosts( int numThreads,
       if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
       if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
       if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
+      std::vector< double > histogram( NumBins, 0 );
       if( j==0 )
       {
         ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
@@ -879,7 +879,8 @@ void ComputeCosts( int numThreads,
       }
       else if( start[1]>0 && j<(numRow-WinSzHalf-1) )
       {
-	UpdateHistogram( medFiltImages, histogram, start, prevStart, valsPerBin );
+        ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
+	//UpdateHistogram( medFiltImages, histogram, start, prevStart, valsPerBin );
 	computePoissonParams( histogram, parameters, false );
       }
       prevStart[0] = start[0]; prevStart[1] = start[1];

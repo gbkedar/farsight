@@ -1,10 +1,10 @@
 #include "itkTranslationTransform.h"
 #include "itkImageRegistrationMethod.h"
 #include "itkMeanSquaresImageToImageMetric.h"
-#include "itkNormalizedCorrelationImageToImageMetric.h"
+// #include "itkNormalizedCorrelationImageToImageMetric.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
 #include "itkCenteredTransformInitializer.h"
-#include "itkAffineTransform.h"
+// #include "itkAffineTransform.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
 #include "itkResampleImageFilter.h"
@@ -12,6 +12,7 @@
 #include "itkSubtractImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkCommand.h"
+#include "itkTIFFImageIO.h"
 
 class TranslateCommandIterationUpdate : public itk::Command
 {
@@ -50,51 +51,51 @@ public:
   }
 };
 
-class AffineCommandIterationUpdate : public itk::Command
-{
-public:
-  typedef  AffineCommandIterationUpdate   Self;
-  typedef  itk::Command             Superclass;
-  typedef itk::SmartPointer<Self>   Pointer;
-  itkNewMacro( Self );
+// class AffineCommandIterationUpdate : public itk::Command
+// {
+// public:
+  // typedef  AffineCommandIterationUpdate   Self;
+  // typedef  itk::Command             Superclass;
+  // typedef itk::SmartPointer<Self>   Pointer;
+  // itkNewMacro( Self );
 
-protected:
-  AffineCommandIterationUpdate() {};
+// protected:
+  // AffineCommandIterationUpdate() {};
 
-public:
-  typedef itk::RegularStepGradientDescentOptimizer OptimizerType;
-  typedef   const OptimizerType *                  OptimizerPointer;
+// public:
+  // typedef itk::RegularStepGradientDescentOptimizer OptimizerType;
+  // typedef   const OptimizerType *                  OptimizerPointer;
 
-  void Execute(itk::Object *caller, const itk::EventObject & event)
-    {
-    Execute( (const itk::Object *)caller, event);
-    }
+  // void Execute(itk::Object *caller, const itk::EventObject & event)
+    // {
+    // Execute( (const itk::Object *)caller, event);
+    // }
 
-  void Execute(const itk::Object * object, const itk::EventObject & event)
-    {
-    OptimizerPointer affineOptimizer =
-                      dynamic_cast< OptimizerPointer >( object );
-    if( ! itk::IterationEvent().CheckEvent( &event ) )
-      {
-      return;
-      }
-      std::cout << affineOptimizer->GetCurrentIteration() << "   ";
-      std::cout << affineOptimizer->GetValue() << "   ";
-      std::cout << affineOptimizer->GetCurrentPosition();
+  // void Execute(const itk::Object * object, const itk::EventObject & event)
+    // {
+    // OptimizerPointer affineOptimizer =
+                      // dynamic_cast< OptimizerPointer >( object );
+    // if( ! itk::IterationEvent().CheckEvent( &event ) )
+      // {
+      // return;
+      // }
+      // std::cout << affineOptimizer->GetCurrentIteration() << "   ";
+      // std::cout << affineOptimizer->GetValue() << "   ";
+      // std::cout << affineOptimizer->GetCurrentPosition();
 
-      // Print the angle for the trace plot
-      vnl_matrix<double> p(2, 2);
-      p[0][0] = (double) affineOptimizer->GetCurrentPosition()[0];
-      p[0][1] = (double) affineOptimizer->GetCurrentPosition()[1];
-      p[1][0] = (double) affineOptimizer->GetCurrentPosition()[2];
-      p[1][1] = (double) affineOptimizer->GetCurrentPosition()[3];
-      vnl_svd<double> svd(p);
-      vnl_matrix<double> r(2, 2);
-      r = svd.U() * vnl_transpose(svd.V());
-      double angle = vcl_asin(r[1][0]);
-      std::cout << " AffineAngle: " << angle * 180.0 / vnl_math::pi << std::endl;
-    }
-};
+      // // Print the angle for the trace plot
+      // vnl_matrix<double> p(2, 2);
+      // p[0][0] = (double) affineOptimizer->GetCurrentPosition()[0];
+      // p[0][1] = (double) affineOptimizer->GetCurrentPosition()[1];
+      // p[1][0] = (double) affineOptimizer->GetCurrentPosition()[2];
+      // p[1][1] = (double) affineOptimizer->GetCurrentPosition()[3];
+      // vnl_svd<double> svd(p);
+      // vnl_matrix<double> r(2, 2);
+      // r = svd.U() * vnl_transpose(svd.V());
+      // double angle = vcl_asin(r[1][0]);
+      // std::cout << " AffineAngle: " << angle * 180.0 / vnl_math::pi << std::endl;
+    // }
+// };
 
 
 int main( int argc, char *argv[] )
@@ -113,12 +114,13 @@ int main( int argc, char *argv[] )
 
   typedef itk::Image< PixelType, Dimension >  FixedImageType;
   typedef itk::Image< PixelType, Dimension >  MovingImageType;
+  typedef  itk::TIFFImageIO TIFFIOType;
 
   typedef itk::AffineTransform< double, Dimension  > AffineTransformType;
   typedef itk::TranslationTransform< double, Dimension > TranslationTransformType;
 
   typedef itk::RegularStepGradientDescentOptimizer OptimizerType;
-  typedef itk::NormalizedCorrelationImageToImageMetric< FixedImageType, MovingImageType > NCRMetricType;
+  // typedef itk::NormalizedCorrelationImageToImageMetric< FixedImageType, MovingImageType > NCRMetricType;
   typedef itk::MeanSquaresImageToImageMetric< FixedImageType, MovingImageType > MetricType;
   typedef itk::LinearInterpolateImageFunction< MovingImageType, double > InterpolatorType;
   typedef itk::ImageRegistrationMethod< FixedImageType, MovingImageType > RegistrationType;
@@ -136,10 +138,16 @@ int main( int argc, char *argv[] )
   typedef itk::ImageFileReader< FixedImageType  > FixedImageReaderType;
   typedef itk::ImageFileReader< MovingImageType > MovingImageReaderType;
   FixedImageReaderType::Pointer  fixedImageReader  = FixedImageReaderType::New();
+  TIFFIOType::Pointer tiffIO1 = TIFFIOType::New();
+  // tiffIO1->SetPixelType(itk::ImageIOBase::USHORT);
   MovingImageReaderType::Pointer movingImageReader = MovingImageReaderType::New();
+  TIFFIOType::Pointer tiffIO2 = TIFFIOType::New();
+  // tiffIO2->SetPixelType(itk::ImageIOBase::USHORT);
 
   fixedImageReader->SetFileName(  argv[1] );
+  fixedImageReader->SetImageIO(tiffIO1);
   movingImageReader->SetFileName( argv[2] );
+  movingImageReader->SetImageIO(tiffIO2);
 
   translationRegistration->SetFixedImage(    fixedImageReader->GetOutput()    );
   translationRegistration->SetMovingImage(   movingImageReader->GetOutput()   );
@@ -209,131 +217,131 @@ int main( int argc, char *argv[] )
     }
 
   //AFFINE STARTS HERE
-  NCRMetricType::Pointer         affineMetric        = NCRMetricType::New();
-  OptimizerType::Pointer      affineOptimizer     = OptimizerType::New();
-  InterpolatorType::Pointer   affineInterpolator  = InterpolatorType::New();
-  RegistrationType::Pointer   affineRegistration  = RegistrationType::New();
+  // NCRMetricType::Pointer         affineMetric        = NCRMetricType::New();
+  // OptimizerType::Pointer      affineOptimizer     = OptimizerType::New();
+  // InterpolatorType::Pointer   affineInterpolator  = InterpolatorType::New();
+  // RegistrationType::Pointer   affineRegistration  = RegistrationType::New();
 
-  affineRegistration->SetMetric(        affineMetric        );
-  affineRegistration->SetOptimizer(     affineOptimizer     );
-  affineRegistration->SetInterpolator(  affineInterpolator  );
+  // affineRegistration->SetMetric(        affineMetric        );
+  // affineRegistration->SetOptimizer(     affineOptimizer     );
+  // affineRegistration->SetInterpolator(  affineInterpolator  );
 
-  AffineTransformType::Pointer  affineTransform = AffineTransformType::New();
-  affineRegistration->SetTransform( affineTransform );
+  // AffineTransformType::Pointer  affineTransform = AffineTransformType::New();
+  // affineRegistration->SetTransform( affineTransform );
 
-  affineRegistration->SetFixedImage(    fixedImageReader->GetOutput()    );
-  affineRegistration->SetMovingImage(   resampler->GetOutput()   );
+  // affineRegistration->SetFixedImage(    fixedImageReader->GetOutput()    );
+  // affineRegistration->SetMovingImage(   resampler->GetOutput()   );
 
-  affineRegistration->SetFixedImageRegion(
-     fixedImageReader->GetOutput()->GetBufferedRegion() );
+  // affineRegistration->SetFixedImageRegion(
+     // fixedImageReader->GetOutput()->GetBufferedRegion() );
 
-  typedef itk::CenteredTransformInitializer< AffineTransformType, FixedImageType,
-					MovingImageType >  TransformInitializerType;
-  TransformInitializerType::Pointer initializer = TransformInitializerType::New();
-  initializer->SetTransform(   affineTransform );
-  initializer->SetFixedImage(  fixedImageReader->GetOutput() );
-  initializer->SetMovingImage( resampler->GetOutput() );
-  //initializer->MomentsOn();
-  initializer->InitializeTransform();
+  // typedef itk::CenteredTransformInitializer< AffineTransformType, FixedImageType,
+					// MovingImageType >  TransformInitializerType;
+  // TransformInitializerType::Pointer initializer = TransformInitializerType::New();
+  // initializer->SetTransform(   affineTransform );
+  // initializer->SetFixedImage(  fixedImageReader->GetOutput() );
+  // initializer->SetMovingImage( resampler->GetOutput() );
+  // //initializer->MomentsOn();
+  // initializer->InitializeTransform();
 
-  affineRegistration->SetInitialTransformParameters( affineTransform->GetParameters() );
-  double translationScale = 
-    fixedImage->GetLargestPossibleRegion().GetSize()[0] > 
-    fixedImage->GetLargestPossibleRegion().GetSize()[1] ?
-    fixedImage->GetLargestPossibleRegion().GetSize()[0] :
-    fixedImage->GetLargestPossibleRegion().GetSize()[1]; //1.0 / 10000.0;
-  translationScale = 1.0/(translationScale*10.0);
+  // affineRegistration->SetInitialTransformParameters( affineTransform->GetParameters() );
+  // double translationScale = 
+    // fixedImage->GetLargestPossibleRegion().GetSize()[0] > 
+    // fixedImage->GetLargestPossibleRegion().GetSize()[1] ?
+    // fixedImage->GetLargestPossibleRegion().GetSize()[0] :
+    // fixedImage->GetLargestPossibleRegion().GetSize()[1]; //1.0 / 10000.0;
+  // translationScale = 1.0/(translationScale*10.0);
 
-  typedef OptimizerType::ScalesType       OptimizerScalesType;
-  OptimizerScalesType affineOptimizerScales( affineTransform->GetNumberOfParameters() );
+  // typedef OptimizerType::ScalesType       OptimizerScalesType;
+  // OptimizerScalesType affineOptimizerScales( affineTransform->GetNumberOfParameters() );
 
-  affineOptimizerScales[0] =  0.001;
-  affineOptimizerScales[1] =  0.001;
-  affineOptimizerScales[2] =  0.001;
-  affineOptimizerScales[3] =  0.001;
-  affineOptimizerScales[4] =  translationScale;
-  affineOptimizerScales[5] =  translationScale;
+  // affineOptimizerScales[0] =  0.001;
+  // affineOptimizerScales[1] =  0.001;
+  // affineOptimizerScales[2] =  0.001;
+  // affineOptimizerScales[3] =  0.001;
+  // affineOptimizerScales[4] =  translationScale;
+  // affineOptimizerScales[5] =  translationScale;
 
-  affineOptimizer->SetScales( affineOptimizerScales );
+  // affineOptimizer->SetScales( affineOptimizerScales );
 
-  double steplength = 0.01;
-  unsigned int maxNumberOfIterations = 100;
+  // double steplength = 0.01;
+  // unsigned int maxNumberOfIterations = 100;
 
-  affineOptimizer->SetMaximumStepLength( steplength );
-  affineOptimizer->SetMinimumStepLength( 0.0001 );
-  affineOptimizer->SetNumberOfIterations( maxNumberOfIterations );
-  affineOptimizer->MinimizeOn();
+  // affineOptimizer->SetMaximumStepLength( steplength );
+  // affineOptimizer->SetMinimumStepLength( 0.0001 );
+  // affineOptimizer->SetNumberOfIterations( maxNumberOfIterations );
+  // affineOptimizer->MinimizeOn();
 
-  // Create the Command observer and register it with the affineOptimizer.
-  //
-  AffineCommandIterationUpdate::Pointer affineObserver = AffineCommandIterationUpdate::New();
-  affineOptimizer->AddObserver( itk::IterationEvent(), affineObserver );
+  // // Create the Command observer and register it with the affineOptimizer.
+  // //
+  // AffineCommandIterationUpdate::Pointer affineObserver = AffineCommandIterationUpdate::New();
+  // affineOptimizer->AddObserver( itk::IterationEvent(), affineObserver );
 
-  try
-    {
-    affineRegistration->Update();
-    std::cout << "Optimizer stop condition: "
-              << affineRegistration->GetOptimizer()->GetStopConditionDescription()
-              << std::endl;
-    }
-  catch( itk::ExceptionObject & err )
-    {
-    std::cerr << "ExceptionObject caught !" << std::endl;
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-    }
+  // try
+    // {
+    // affineRegistration->Update();
+    // std::cout << "Optimizer stop condition: "
+              // << affineRegistration->GetOptimizer()->GetStopConditionDescription()
+              // << std::endl;
+    // }
+  // catch( itk::ExceptionObject & err )
+    // {
+    // std::cerr << "ExceptionObject caught !" << std::endl;
+    // std::cerr << err << std::endl;
+    // return EXIT_FAILURE;
+    // }
 
-  OptimizerType::ParametersType finalParametersAffine =
-                    affineRegistration->GetLastTransformParameters();
+  // OptimizerType::ParametersType finalParametersAffine =
+                    // affineRegistration->GetLastTransformParameters();
 
-  const double finalRotationCenterX = affineTransform->GetCenter()[0];
-  const double finalRotationCenterY = affineTransform->GetCenter()[1];
-  const double finalTranslationX    = finalParametersAffine[4];
-  const double finalTranslationY    = finalParametersAffine[5];
+  // const double finalRotationCenterX = affineTransform->GetCenter()[0];
+  // const double finalRotationCenterY = affineTransform->GetCenter()[1];
+  // const double finalTranslationX    = finalParametersAffine[4];
+  // const double finalTranslationY    = finalParametersAffine[5];
 
-  const unsigned int numberOfIterationsAffine = affineOptimizer->GetCurrentIteration();
-  const double bestValueAffine = affineOptimizer->GetValue();
+  // const unsigned int numberOfIterationsAffine = affineOptimizer->GetCurrentIteration();
+  // const double bestValueAffine = affineOptimizer->GetValue();
 
-  std::cout << "Result = " << std::endl;
-  std::cout << " Center X      = " << finalRotationCenterX  << std::endl;
-  std::cout << " Center Y      = " << finalRotationCenterY  << std::endl;
-  std::cout << " Translation X = " << finalTranslationX  << std::endl;
-  std::cout << " Translation Y = " << finalTranslationY  << std::endl;
-  std::cout << " Iterations    = " << numberOfIterationsAffine << std::endl;
-  std::cout << " Metric value  = " << bestValueAffine    << std::endl;
+  // std::cout << "Result = " << std::endl;
+  // std::cout << " Center X      = " << finalRotationCenterX  << std::endl;
+  // std::cout << " Center Y      = " << finalRotationCenterY  << std::endl;
+  // std::cout << " Translation X = " << finalTranslationX  << std::endl;
+  // std::cout << " Translation Y = " << finalTranslationY  << std::endl;
+  // std::cout << " Iterations    = " << numberOfIterationsAffine << std::endl;
+  // std::cout << " Metric value  = " << bestValueAffine    << std::endl;
 
-  vnl_matrix<double> p(2, 2);
-  p[0][0] = (double) finalParametersAffine[0];
-  p[0][1] = (double) finalParametersAffine[1];
-  p[1][0] = (double) finalParametersAffine[2];
-  p[1][1] = (double) finalParametersAffine[3];
-  vnl_svd<double> svd(p);
-  vnl_matrix<double> r(2, 2);
-  r = svd.U() * vnl_transpose(svd.V());
-  double angle = vcl_asin(r[1][0]);
+  // vnl_matrix<double> p(2, 2);
+  // p[0][0] = (double) finalParametersAffine[0];
+  // p[0][1] = (double) finalParametersAffine[1];
+  // p[1][0] = (double) finalParametersAffine[2];
+  // p[1][1] = (double) finalParametersAffine[3];
+  // vnl_svd<double> svd(p);
+  // vnl_matrix<double> r(2, 2);
+  // r = svd.U() * vnl_transpose(svd.V());
+  // double angle = vcl_asin(r[1][0]);
 
-  const double angleInDegrees = angle * 180.0 / vnl_math::pi;
+  // const double angleInDegrees = angle * 180.0 / vnl_math::pi;
 
-  std::cout << " Scale 1         = " << svd.W(0)        << std::endl;
-  std::cout << " Scale 2         = " << svd.W(1)        << std::endl;
-  std::cout << " Angle (degrees) = " << angleInDegrees  << std::endl;
+  // std::cout << " Scale 1         = " << svd.W(0)        << std::endl;
+  // std::cout << " Scale 2         = " << svd.W(1)        << std::endl;
+  // std::cout << " Angle (degrees) = " << angleInDegrees  << std::endl;
 
 
-  AffineTransformType::Pointer finalTransform = AffineTransformType::New();
+  // AffineTransformType::Pointer finalTransform = AffineTransformType::New();
 
-  finalTransform->SetParameters( finalParametersAffine );
-  finalTransform->SetFixedParameters( affineTransform->GetFixedParameters() );
+  // finalTransform->SetParameters( finalParametersAffine );
+  // finalTransform->SetFixedParameters( affineTransform->GetFixedParameters() );
 
-  ResampleFilterType::Pointer finalResampler = ResampleFilterType::New();
+  // ResampleFilterType::Pointer finalResampler = ResampleFilterType::New();
 
-  finalResampler->SetTransform( finalTransform );
-  finalResampler->SetInput( resampler->GetOutput() );
+  // finalResampler->SetTransform( finalTransform );
+  // finalResampler->SetInput( resampler->GetOutput() );
 
-  finalResampler->SetSize(    fixedImage->GetLargestPossibleRegion().GetSize() );
-  finalResampler->SetOutputOrigin(  fixedImage->GetOrigin() );
-  finalResampler->SetOutputSpacing( fixedImage->GetSpacing() );
-  finalResampler->SetOutputDirection( fixedImage->GetDirection() );
-  finalResampler->SetDefaultPixelValue( 100 );
+  // finalResampler->SetSize(    fixedImage->GetLargestPossibleRegion().GetSize() );
+  // finalResampler->SetOutputOrigin(  fixedImage->GetOrigin() );
+  // finalResampler->SetOutputSpacing( fixedImage->GetSpacing() );
+  // finalResampler->SetOutputDirection( fixedImage->GetDirection() );
+  // finalResampler->SetDefaultPixelValue( 100 );
 
   typedef  unsigned short  OutputPixelType;
   typedef itk::Image< OutputPixelType, Dimension > OutputImageType;
@@ -341,6 +349,8 @@ int main( int argc, char *argv[] )
   typedef itk::ImageFileWriter< OutputImageType >  WriterType;
 
   WriterType::Pointer      writer =  WriterType::New();
+  TIFFIOType::Pointer tiffIO3 = TIFFIOType::New();
+  // tiffIO3->SetPixelType(itk::ImageIOBase::USHORT);
   CastFilterType::Pointer  caster =  CastFilterType::New();
 
   std::string name = argv[2];
@@ -348,18 +358,22 @@ int main( int argc, char *argv[] )
   name = name.substr(0,found) + "_" + "registered.tif";
   writer->SetFileName( name.c_str() );
 
-  caster->SetInput( resampler->GetOutput() );
+  caster->SetInput( resampler->GetOutput() ); //finalResampler->GetOutput()
   writer->SetInput( caster->GetOutput()   );
+  writer->SetImageIO( tiffIO3 );
   writer->Update();
 
   //Add initial translation to the affine transform
-  finalParametersAffine[4] += finalParametersTranslation[0];
-  finalParametersAffine[5] += finalParametersTranslation[1];
+  // finalParametersAffine[4] += finalParametersTranslation[0];
+  // finalParametersAffine[5] += finalParametersTranslation[1];
 
   for( int i=3; i<argc; ++i )
   {
     MovingImageReaderType::Pointer repeatMoveImageReader = MovingImageReaderType::New();
     repeatMoveImageReader->SetFileName( argv[i] );
+	TIFFIOType::Pointer tiffIO4 = TIFFIOType::New();
+    // tiffIO4->SetPixelType(itk::ImageIOBase::USHORT);
+	repeatMoveImageReader->SetImageIO( tiffIO4 );
     try
     {
     repeatMoveImageReader->Update();
@@ -370,14 +384,12 @@ int main( int argc, char *argv[] )
     std::cerr << err << std::endl;
     return EXIT_FAILURE;
     }
-    AffineTransformType::Pointer combinedTransform = AffineTransformType::New();
-
-    combinedTransform->SetParameters( finalParametersAffine );
-    combinedTransform->SetFixedParameters( affineTransform->GetFixedParameters() );
+    // AffineTransformType::Pointer combinedTransform = AffineTransformType::New();
+    // combinedTransform->SetParameters( finalParametersAffine );
+    // combinedTransform->SetFixedParameters( affineTransform->GetFixedParameters() );
 
     ResampleFilterType::Pointer repeatResampler = ResampleFilterType::New();
-
-    repeatResampler->SetTransform( combinedTransform );
+    repeatResampler->SetTransform( translationRegistration->GetOutput()->Get() );//combinedTransform
     repeatResampler->SetInput( repeatMoveImageReader->GetOutput() );
 
     repeatResampler->SetSize(    fixedImage->GetLargestPossibleRegion().GetSize() );
@@ -396,6 +408,9 @@ int main( int argc, char *argv[] )
     repeatWriter->SetFileName( repeatName.c_str() );
     repeatCaster->SetInput( repeatResampler->GetOutput() );
     repeatWriter->SetInput( repeatCaster->GetOutput()   );
+	TIFFIOType::Pointer tiffIO5 = TIFFIOType::New();
+    // tiffIO5->SetPixelType(itk::ImageIOBase::USHORT);
+	repeatWriter->SetImageIO( tiffIO5 );
 
     try
     {

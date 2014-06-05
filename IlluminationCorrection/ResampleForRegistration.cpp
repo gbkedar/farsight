@@ -22,7 +22,7 @@ typedef itk::ImageFileWriter< Uchar2DImageType > ImageFileWriterType;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage MaxDim(Optional Set to 10000)\n";
+	    << " " << funcName << " InputImage MaxDim(Optional Set to 2000)\n";
 }
 
 template<typename InputImageType> typename InputImageType::Pointer

@@ -513,10 +513,10 @@ int main( int argc, char *argv[] )
 
   outputImage = PasteNonOverLappingSections( outputImage, inputImage, overlapX, overlapY, positionVec, xMin, yMin, xMax, yMax, numThreads );
 
-  if( overlapX<3 || overlapY<3 )
-     outputImage = SmoothSeams( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
-  else
-     BlendOverlaps( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
+  //if( overlapX<3 || overlapY<3 )
+  //   outputImage = SmoothSeams( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
+  //else
+  //   BlendOverlaps( outputImage, positionVec, xMin, yMin, xMax, yMax, numThreads, nrrdSize[0], nrrdSize[1] );
 
   WriteITKImage<US2ImageType>( outputImage, nameTemplate ); 
 
