@@ -68,6 +68,7 @@ int main(int argc, char *argv[])
 			inputImage->GetLargestPossibleRegion().GetSize()[1] :
 			inputImage->GetLargestPossibleRegion().GetSize()[0];
   scaleFactor = scaleFactor/(double)largestDim;
+  std::cout<<"The scale factor is:"<<scaleFactor<<std::endl;
   const Ushort2DImageType::SpacingType& inputSpacing = inputImage->GetSpacing();
 
   CastFilterType::Pointer caster = CastFilterType::New();
