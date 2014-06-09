@@ -2154,7 +2154,7 @@ int main(int argc, char *argv[])
   }
   US3ImageType::Pointer clonedImage = duplicator->GetModifiableOutput();
   US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
-  if( lowNoiseThr ) 
+  if( lowNoiseThr && !useSingleLev ) 
     upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 
