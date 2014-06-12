@@ -65,6 +65,7 @@
 #define CWin  16	//This is half the inner window and must be a divisor of WinSz
 #define NumBins 1024	//Downsampled to these number of bins
 #define NN 10.0		//The bottom NN percent are used to estimate the BG
+#define NNBF 75.0	//The bottom NNBF percent are used to estimate the BG
 #define MinMax 100	//Number of pixels used to compute the min/max
 #define HistPCMin 20.0	//Min percentage of histogram to search while 
 			//updating poisson params
@@ -1228,7 +1229,9 @@ std::vector< CostImageType::Pointer >
     std::sort( pixelVectForBG.at(i).begin(), pixelVectForBG.at(i).end() );
 
   //Take the average of the bottom NN percent of the non-flour pixels
-  itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
+  itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())*NN/100.0+0.5);
+  if( useSingleLev ) //Use different percentage in case of brightfield
+    NNPcIndex = std::floor(((double)pixelVectForBG.size())/NNBF+0.5);
   CostIterType BGAvgImIter( BGAvgIm, BGAvgIm->GetLargestPossibleRegion() ); 
   for( BGAvgImIter.GoToBegin(); !BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
   {
@@ -1393,6 +1396,8 @@ std::vector< CostImageType::Pointer >
 
   //Take the average of the bottom NN percent of the non-flour pixels
   itk::SizeValueType NNPcIndex = std::floor(((double)pixelVectForBG.size())/NN+0.5);
+  if( useSingleLev ) //Use different percentage in case of brightfield
+    NNPcIndex = std::floor(((double)pixelVectForBG.size())/NNBF+0.5);
   CostIterType BGAvgImIter( BGAvgIm, BGAvgIm->GetLargestPossibleRegion() ); 
   for( BGAvgImIter.GoToBegin(); !BGAvgImIter.IsAtEnd(); ++BGAvgImIter )
   {
@@ -2115,6 +2120,8 @@ int main(int argc, char *argv[])
   }
   if( argc > 4 ) lowNoiseThr = (US3ImageType::PixelType) atoll( argv[4] );
   else lowNoiseThr = (US3ImageType::PixelType) LowerNoiseThr;
+  if( useSingleLev )
+    lowNoiseThr = itk::NumericTraits< US3ImageType::PixelType >::max();
   std::cout<<"Lower noise threshold set to "<<lowNoiseThr<<std::endl;
 
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
