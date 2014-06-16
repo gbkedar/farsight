@@ -366,6 +366,32 @@ US2ImageType::Pointer GetTile( US3ImageType::Pointer &readImage,
   return currentTile;
 }
 
+void ComputeGlobalHistogram(
+	std::vector< US2ImageType::Pointer  > &medFiltImages,
+	std::vector< double > &histogram,
+	US3ImageType::PixelType valsPerBin )
+{
+  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
+  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
+  {
+    US2ImageType::SizeType size;
+    size[0] = medFiltImages.at(i)->GetLargestPossibleRegion().GetSize()[0];
+    size[1] = medFiltImages.at(i)->GetLargestPossibleRegion().GetSize()[1];
+    US2ImageType::IndexType start; start[0] = 0; start[1] = 0;
+    US2ImageType::RegionType region;
+    region.SetSize( size ); region.SetIndex( start );
+    ConstIterType constIter ( medFiltImages.at(i), region );
+    for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
+      ++histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)];
+  }
+  double normalizeFactor = ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
+  for( itk::SizeValueType j=0; j<histogram.size(); ++j )
+  {
+    histogram.at(j) /= normalizeFactor;
+  }
+  return;
+}
+
 void ComputeHistogram(
 	std::vector< US2ImageType::Pointer  > &medFiltImages,
 	std::vector< double > &histogram,
@@ -831,6 +857,7 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
 
 void ComputeCosts( int numThreads,
 		   std::vector< US2ImageType::Pointer  > &medFiltImages,
+		   std::vector< double > &globalParameters,
 		   std::vector< CostImageType::Pointer > &autoFlourCosts,
 		   std::vector< CostImageType::Pointer > &flourCosts,
 		   std::vector< CostImageType::Pointer > &autoFlourCostsBG,
@@ -862,7 +889,7 @@ void ComputeCosts( int numThreads,
 #endif
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
-    std::vector< double > parameters( 5, 0 );
+    std::vector< double > parameters( globalParameters );
     US2ImageType::IndexType prevStart; prevStart[0] = 0; prevStart[1] = 0;
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
@@ -872,18 +899,19 @@ void ComputeCosts( int numThreads,
       if( start[0]<0 ) start[0] = 0; if( start[1]<0 ) start[1] = 0;
       if( (start[0]+WinSz)>=numRow ) start[0] =  numRow-WinSz-1;
       if( (start[1]+WinSz)>=numCol ) start[1] =  numCol-WinSz-1;
-      std::vector< double > histogram( NumBins, 0 );
-      if( j==0 )
+      std::vector< double > histogram( NumBins, 0 ); //Move outside for loop after
+      //debugging UpdateHistogram
+      /*if( j==0 )
       {
         ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
 	computePoissonParams( histogram, parameters, true );
       }
       else if( start[1]>0 && j<(numRow-WinSzHalf-1) )
-      {
+      {*/
         ComputeHistogram( medFiltImages, histogram, start, valsPerBin );
 	//UpdateHistogram( medFiltImages, histogram, start, prevStart, valsPerBin );
 	computePoissonParams( histogram, parameters, false );
-      }
+      /*}*/
       prevStart[0] = start[0]; prevStart[1] = start[1];
 
       std::vector< double > pdf0( histogram.size()+1, 1 );
@@ -2226,13 +2254,19 @@ int main(int argc, char *argv[])
   }
 
   if( !useSingleLev )
-    ComputeCosts( numThreads, medFiltImages, autoFlourCosts, flourCosts,
-#ifdef DEBUG_RESCALING_N_COST_EST
-  				autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
-#else
-  				autoFlourCostsBG, flourCostsBG, valsPerBin );
-#endif //DEBUG_RESCALING_N_COST_EST
+  {
+    std::vector< double > globalHistogram( NumBins, 0 );
+    std::vector< double > globalParameters( 5, 0 );
+    ComputeGlobalHistogram( medFiltImages, globalHistogram, valsPerBin );
+    computePoissonParams( globalHistogram, globalParameters, true );
 
+    ComputeCosts( numThreads, medFiltImages, globalParameters, autoFlourCosts, flourCosts,
+#ifdef DEBUG_RESCALING_N_COST_EST
+			autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
+#else
+			autoFlourCostsBG, flourCostsBG, valsPerBin );
+#endif //DEBUG_RESCALING_N_COST_EST
+  }
 #ifdef DEBUG_RESCALING_N_COST_EST
   std::string OutFiles1 = nameTemplate + "costImageF.nrrd";
   std::string OutFiles2 = nameTemplate + "costImageFBG.nrrd";
