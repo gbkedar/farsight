@@ -107,8 +107,9 @@ itk::SizeValueType poissonCompsFailed   = 0;
 void usage( const char *funcName )
 {
   std::cout << "USAGE:"
-	    << " " << funcName << " InputImage NumberOfThreads(Optional-default=24)"
-	    << " UseSignleLevel(Default=0) UseNoiseThr(For max of input pixel type use 0)\n";
+	    << " " << funcName << " InputImage NumberOfColsInMeanderScan(0 to skip) "
+	    << "NumberOfThreads(Optional-default=24) UseSignleLevel(Optional-default=0) "
+	    << "UseNoiseThr(For max of input pixel type use 0)\n";
 }
 
 template<typename InputImageType> void WriteITKImage
@@ -2123,9 +2124,110 @@ if( !useSingleLev )
   return delta;
 }
 
+void DivideImageByScanDirection( US3ImageType::Pointer Input3dImage, int numColsForDiv,
+		std::vector< US3ImageType::Pointer  > &dividedOutputs )
+{
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > OutputIterType;
+  typedef itk::ImageRegionConstIteratorWithIndex< US3ImageType  > InputIterConstType;
+  itk::SizeValueType numSlicesFull = Input3dImage->GetLargestPossibleRegion().GetSize()[2];
+  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
+  itk::SizeValueType numCol = Input3dImage->GetLargestPossibleRegion().GetSize()[1];
+  itk::SizeValueType numRow = Input3dImage->GetLargestPossibleRegion().GetSize()[0];
+  US3ImageType::SizeType size; size[0] = numRow; size[1] = numCol; size[2] = numSlices;
+  US3ImageType::Pointer dir1Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
+  US3ImageType::Pointer dir2Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
+  dividedOutputs.at(0) = dir1Im; dir1Im->Register();
+  dividedOutputs.at(1) = dir2Im; dir2Im->Register();
+  bool first = true;
+  itk::IndexValueType firstStackIndex = 0;
+  itk::IndexValueType secondStackIndex = 0;
+  //Copy slices in alternate rows
+  for( unsigned i=0; i<numSlicesFull; i+=numColsForDiv )
+  {
+    for( unsigned j=i; j<(i+numColsForDiv); ++j )
+    {
+      US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0; inpIndex[2]=i+j;
+      US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0;
+      if( first ) outIndex[2] = firstStackIndex++;
+      else outIndex[2] = secondStackIndex++;
+      US3ImageType::SizeType sliceSize;
+      sliceSize[0] = numRow; sliceSize[1] = numCol; sliceSize[2] = 1;
+      if( first ) outIndex[2] = firstStackIndex++;
+      else outIndex[2] = secondStackIndex++;
+      US3ImageType::RegionType regionInput, regionOutput;
+      regionInput.SetSize( sliceSize ); regionInput.SetIndex( inpIndex );
+      regionOutput.SetSize( sliceSize ); regionOutput.SetIndex( outIndex );
+      InputIterConstType inputIter( Input3dImage, regionInput );
+      if( first )
+      {
+	OutputIterType outputIter( dir1Im, regionOutput );
+	outputIter.GoToBegin(); inputIter.GoToBegin();
+	for( ; !inputIter.IsAtEnd() && !outputIter.IsAtEnd(); ++inputIter, ++outputIter )
+	  outputIter.Set( inputIter.Get() );
+      }
+      else
+      {
+	OutputIterType outputIter( dir2Im, regionOutput );
+	outputIter.GoToBegin(); inputIter.GoToBegin();
+	for( ; !inputIter.IsAtEnd() && !outputIter.IsAtEnd(); ++inputIter, ++outputIter )
+	  outputIter.Set( inputIter.Get() );
+      }
+    }
+    first = !first;
+  }
+  return;
+}
+
+void MergeAlternateScanRows( US3ImageType::Pointer Output3dImage, int numColsForDiv,
+		std::vector< US3ImageType::Pointer  > &dividedOutputs )
+{
+  typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > OutputIterType;
+  typedef itk::ImageRegionConstIteratorWithIndex< US3ImageType  > InputIterConstType;
+  itk::SizeValueType numSlicesFull = Output3dImage->GetLargestPossibleRegion().GetSize()[2];
+  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
+  itk::SizeValueType numCol = Output3dImage->GetLargestPossibleRegion().GetSize()[1];
+  itk::SizeValueType numRow = Output3dImage->GetLargestPossibleRegion().GetSize()[0];
+  bool first = true;
+  itk::IndexValueType firstStackIndex = 0;
+  itk::IndexValueType secondStackIndex = 0;
+  //Copy slices from alternate rows
+  for( unsigned i=0; i<numSlicesFull; i+=numColsForDiv )
+  {
+    for( unsigned j=i; j<(i+numColsForDiv); ++j )
+    {
+      US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0;
+      if( first ) inpIndex[2] = firstStackIndex++;
+      else inpIndex[2] = secondStackIndex++;
+      US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0; outIndex[2]=i+j;
+      US3ImageType::SizeType sliceSize;
+      sliceSize[0] = numRow; sliceSize[1] = numCol; sliceSize[2] = 1;
+      US3ImageType::RegionType regionInput, regionOutput;
+      regionInput.SetSize( sliceSize ); regionInput.SetIndex( inpIndex );
+      regionOutput.SetSize( sliceSize ); regionOutput.SetIndex( outIndex );
+      OutputIterType outputIter( Output3dImage, regionOutput );
+      if( first )
+      {
+	InputIterConstType inputIter( dividedOutputs.at(0), regionInput );
+	outputIter.GoToBegin(); inputIter.GoToBegin();
+	for( ; !inputIter.IsAtEnd() && !outputIter.IsAtEnd(); ++inputIter, ++outputIter )
+	  outputIter.Set( inputIter.Get() );
+      }
+      else
+      {
+	InputIterConstType inputIter( dividedOutputs.at(1), regionInput );
+	outputIter.GoToBegin(); inputIter.GoToBegin();
+	for( ; !inputIter.IsAtEnd() && !outputIter.IsAtEnd(); ++inputIter, ++outputIter )
+	  outputIter.Set( inputIter.Get() );
+      }
+    }
+    first = !first;
+  }
+  return;
+}
+
 int main(int argc, char *argv[])
 {
-  if( argc < 2 )
+  if( argc < 3 )
   {
     usage(argv[0]);
     std::cerr << "PRESS ENTER TO EXIT\n";
@@ -2136,17 +2238,18 @@ int main(int argc, char *argv[])
   std::string inputImageName = argv[1]; //Name of the input image
   unsigned found = inputImageName.find_last_of(".");
   nameTemplate = inputImageName.substr(0,found) + "_";
+  int numColsForDiv = atoi(argv[2]);
   int numThreads = 24;
   int useSingleLev = 0;
   US3ImageType::PixelType lowNoiseThr = 0;
-  if( argc > 2 )
-    numThreads = atoi( argv[2] );
   if( argc > 3 )
+    numThreads = atoi( argv[3] );
+  if( argc > 4 )
   {
-    useSingleLev = atoi( argv[3] );
+    useSingleLev = atoi( argv[4] );
     std::cout<<"Single level flag set to "<<useSingleLev<<std::endl;
   }
-  if( argc > 4 ) lowNoiseThr = (US3ImageType::PixelType) atoll( argv[4] );
+  if( argc > 5 ) lowNoiseThr = (US3ImageType::PixelType) atoll( argv[5] );
   else lowNoiseThr = (US3ImageType::PixelType) LowerNoiseThr;
   if( useSingleLev )
     lowNoiseThr = itk::NumericTraits< US3ImageType::PixelType >::max();
@@ -2155,13 +2258,47 @@ int main(int argc, char *argv[])
   double reducedThreadsDbl = std::floor((double)numThreads*0.95);
   int reducedThreads9 = 1>reducedThreadsDbl? 1 : (int)reducedThreadsDbl;
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
-  US3ImageType::Pointer inputImage = ReadITKImageScifio<US3ImageType>( inputImageName );
-  itk::SizeValueType numSlices = inputImage->GetLargestPossibleRegion().GetSize()[2];
-  itk::SizeValueType numCol = inputImage->GetLargestPossibleRegion().GetSize()[1];
-  itk::SizeValueType numRow = inputImage->GetLargestPossibleRegion().GetSize()[0];
+  US3ImageType::Pointer inputImageFull = ReadITKImageScifio<US3ImageType>( inputImageName );
+  itk::SizeValueType numSlicesFull = inputImageFull->GetLargestPossibleRegion().GetSize()[2];
+  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
+  itk::SizeValueType numCol = inputImageFull->GetLargestPossibleRegion().GetSize()[1];
+  itk::SizeValueType numRow = inputImageFull->GetLargestPossibleRegion().GetSize()[0];
 
-  std::cout<<"Number of slices:"<<numSlices<<" Rows[0]:"<<numRow<<" Cols: "<<numCol<<"\n";
+  //Dupulicate for noise thresholding
+  typedef itk::ImageDuplicator<US3ImageType> DuplicatorType;
+  DuplicatorType::Pointer duplicator = DuplicatorType::New();
+  duplicator->SetInputImage( inputImageFull );
+  try
+  {
+    duplicator->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught median filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  US3ImageType::Pointer clonedImageFull = duplicator->GetModifiableOutput();
 
+  std::cout<<"Number of slices:"<<numSlicesFull<<" Rows[0]:"<<numRow<<" Cols: "<<numCol<<"\n";
+  std::vector< US3ImageType::Pointer  > dividedInputs;
+  std::vector< US3ImageType::Pointer > dividedOutputs;
+  
+  if( numColsForDiv )
+  {
+    dividedInputs.resize(2); dividedOutputs.resize(2);
+    DivideImageByScanDirection( inputImageFull, numColsForDiv, dividedInputs );
+    DivideImageByScanDirection( clonedImageFull, numColsForDiv, dividedOutputs );
+  }
+  else
+  {
+    dividedInputs.push_back( inputImageFull );
+    dividedOutputs.push_back( clonedImageFull );
+  }
+
+for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
+{//Start scoping for for loop on scan dir division
+  US3ImageType::Pointer inputImage = dividedInputs.at(numMeanders);
+  US3ImageType::Pointer clonedImage = dividedOutputs.at(numMeanders);
   std::vector< US2ImageType::Pointer  > medFiltImages;
   std::vector< CostImageType::Pointer > autoFlourCosts, flourCosts;
   std::vector< CostImageType::Pointer > autoFlourCostsBG, flourCostsBG;
@@ -2175,19 +2312,6 @@ int main(int argc, char *argv[])
 #endif //DEBUG_RESCALING_N_COST_EST
 
 //{ //Scoping for Noise thresholded image
-  typedef itk::ImageDuplicator<US3ImageType> DuplicatorType;
-  DuplicatorType::Pointer duplicator = DuplicatorType::New();
-  duplicator->SetInputImage( inputImage );
-  try
-  {
-    duplicator->Update();
-  }
-  catch( itk::ExceptionObject & excep )
-  {
-    std::cerr << "Exception caught median filter!" << excep << std::endl;
-    exit (EXIT_FAILURE);
-  }
-  US3ImageType::Pointer clonedImage = duplicator->GetModifiableOutput();
   US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
   if( lowNoiseThr && !useSingleLev ) 
     upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
@@ -2470,12 +2594,18 @@ int main(int argc, char *argv[])
     }
 */
   }
+}//End scoping for for loop on scan dir division
+
+  MergeAlternateScanRows( clonedImageFull, numColsForDiv, dividedOutputs );
+  dividedOutputs.at(0)->UnRegister(); dividedOutputs.at(1)->UnRegister();
+  dividedInputs.at(0)->UnRegister(); dividedInputs.at(1)->UnRegister();
+  dividedOutputs.clear(); dividedInputs.clear();  
 
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
 
-  WriteITKImage<US3ImageType>( clonedImage, correctedImageName );
+  WriteITKImage<US3ImageType>( clonedImageFull, correctedImageName );
 
   exit( EXIT_SUCCESS );
 }
