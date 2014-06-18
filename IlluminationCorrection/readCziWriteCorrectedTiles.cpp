@@ -221,7 +221,7 @@ int main(int argc, char *argv[])
 {
   if( argc < 2 )
   {
-    std::cerr<<"Usage:"<<argv[0]<<" InputCziFile num_threads(optional-default 6)\n";
+    std::cerr<<"Usage:"<<argv[0]<<" InputCziFile num_threads(disabled for now/optional-default 6)\n";
     std::cerr << "PRESS ENTER TO EXIT\n";
     getchar();
     return EXIT_FAILURE;
