@@ -368,24 +368,22 @@ US2ImageType::Pointer GetTile( US3ImageType::Pointer &readImage,
 }
 
 void ComputeGlobalHistogram(
-	std::vector< US2ImageType::Pointer  > &medFiltImages,
+	US3ImageType::Pointer inpImage,
 	std::vector< double > &histogram,
 	US3ImageType::PixelType valsPerBin )
 {
-  typedef itk::ImageRegionConstIterator< US2ImageType > ConstIterType;
-  for( itk::SizeValueType i=0; i<medFiltImages.size(); ++i )
-  {
-    US2ImageType::SizeType size;
-    size[0] = medFiltImages.at(i)->GetLargestPossibleRegion().GetSize()[0];
-    size[1] = medFiltImages.at(i)->GetLargestPossibleRegion().GetSize()[1];
-    US2ImageType::IndexType start; start[0] = 0; start[1] = 0;
-    US2ImageType::RegionType region;
-    region.SetSize( size ); region.SetIndex( start );
-    ConstIterType constIter ( medFiltImages.at(i), region );
-    for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
-      ++histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)];
-  }
-  double normalizeFactor = ((double)WinSz)*((double)WinSz)*((double)medFiltImages.size());
+  typedef itk::ImageRegionConstIterator< US3ImageType > ConstIterType;
+  US3ImageType::SizeType size;
+  size[0] = inpImage->GetLargestPossibleRegion().GetSize()[0];
+  size[1] = inpImage->GetLargestPossibleRegion().GetSize()[1];
+  size[2] = inpImage->GetLargestPossibleRegion().GetSize()[2];
+  US3ImageType::IndexType start; start[0] = 0; start[1] = 0; start[2] = 0;
+  US3ImageType::RegionType region;
+  region.SetSize( size ); region.SetIndex( start );
+  ConstIterType constIter ( inpImage, region );
+  for( constIter.GoToBegin(); !constIter.IsAtEnd(); ++constIter )
+    ++histogram[(itk::SizeValueType)std::floor((double)constIter.Get()/(double)valsPerBin)];
+  double normalizeFactor = size[0]*size[1]*size[2];
   for( itk::SizeValueType j=0; j<histogram.size(); ++j )
   {
     histogram.at(j) /= normalizeFactor;
@@ -2182,11 +2180,12 @@ void DivideImageByScanDirection( US3ImageType::Pointer Input3dImage, int numCols
   return;
 }
 
-void MergeAlternateScanRows( US3ImageType::Pointer Output3dImage, int numColsForDiv,
-		std::vector< US3ImageType::Pointer  > &dividedOutputs )
+template<typename InputImageType> void MergeAlternateScanRows(
+	typename InputImageType::Pointer Output3dImage, int numColsForDiv,
+	std::vector< typename InputImageType::Pointer  > &dividedOutputs )
 {
-  typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > OutputIterType;
-  typedef itk::ImageRegionConstIteratorWithIndex< US3ImageType  > InputIterConstType;
+  typedef typename itk::ImageRegionIteratorWithIndex< InputImageType  > OutputIterType;
+  typedef typename itk::ImageRegionConstIteratorWithIndex< InputImageType  > InputIterConstType;
   itk::SizeValueType numSlicesFull = Output3dImage->GetLargestPossibleRegion().GetSize()[2];
   itk::SizeValueType numCol = Output3dImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = Output3dImage->GetLargestPossibleRegion().GetSize()[0];
@@ -2198,13 +2197,13 @@ void MergeAlternateScanRows( US3ImageType::Pointer Output3dImage, int numColsFor
   {
     for( unsigned j=i; j<(i+numColsForDiv); ++j )
     {
-      US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0;
+      typename InputImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0;
       if( first ) inpIndex[2] = firstStackIndex++;
       else inpIndex[2] = secondStackIndex++;
-      US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0; outIndex[2]=j;
-      US3ImageType::SizeType sliceSize;
+      typename InputImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0; outIndex[2]=j;
+      typename InputImageType::SizeType sliceSize;
       sliceSize[0] = numRow; sliceSize[1] = numCol; sliceSize[2] = 1;
-      US3ImageType::RegionType regionInput, regionOutput;
+      typename InputImageType::RegionType regionInput, regionOutput;
       regionInput.SetSize( sliceSize ); regionInput.SetIndex( inpIndex );
       regionOutput.SetSize( sliceSize ); regionOutput.SetIndex( outIndex );
       OutputIterType outputIter( Output3dImage, regionOutput );
@@ -2281,6 +2280,25 @@ int main(int argc, char *argv[])
   }
   US3ImageType::Pointer clonedImageFull = duplicator->GetModifiableOutput();
 
+  //Noise threshold images if needed
+  US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
+  if( lowNoiseThr && !useSingleLev ) 
+    upperThreshold = SetSaturatedFGPixelsToMin( inputImageFull, numThreads, lowNoiseThr );
+
+  //Compute global poisson parameters
+  US3ImageType::PixelType valsPerBin = 1;
+  while( ((double)(upperThreshold+1)/(double)valsPerBin) > NumBins )
+  {
+    ++valsPerBin;
+  }
+  std::vector< double > globalHistogram( NumBins, 0 );
+  std::vector< double > globalParameters( 5, 0 );
+  if( !useSingleLev )
+  {
+    ComputeGlobalHistogram( inputImageFull, globalHistogram, valsPerBin );
+    computePoissonParams( globalHistogram, globalParameters, true );
+  }
+
   std::cout<<"Number of slices:"<<numSlicesFull<<" Rows[0]:"<<numRow<<" Cols: "<<numCol<<"\n";
   std::vector< US3ImageType::Pointer  > dividedInputs;
   std::vector< US3ImageType::Pointer > dividedOutputs;
@@ -2296,6 +2314,11 @@ int main(int argc, char *argv[])
     dividedInputs.push_back( inputImageFull );
     dividedOutputs.push_back( clonedImageFull );
   }
+
+#ifdef DEBUG_THREE_LEVEL_LABELING
+  std::vector< UC3ImageType::Pointer  > dividedLabels;
+  dividedLabels.resize( dividedInputs.size() );
+#endif //DEBUG_THREE_LEVEL_LABELING
 
 for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 {//Start scoping for for loop on scan dir division
@@ -2316,9 +2339,6 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 #endif //DEBUG_RESCALING_N_COST_EST
 
 //{ //Scoping for Noise thresholded image
-  US3ImageType::PixelType upperThreshold = itk::NumericTraits< US3ImageType::PixelType >::max();
-  if( lowNoiseThr && !useSingleLev ) 
-    upperThreshold = SetSaturatedFGPixelsToMin( inputImage, numThreads, lowNoiseThr );
   typedef itk::MedianImageFilter< US2ImageType, US2ImageType > MedianFilterType;
 
 #ifdef _OPENMP
@@ -2375,19 +2395,9 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 
   std::cout<<"Done! Starting to compute costs\n"<<std::flush;
 
-  US3ImageType::PixelType valsPerBin = 1;
-  while( ((double)(upperThreshold+1)/(double)valsPerBin) > NumBins )
-  {
-    ++valsPerBin;
-  }
 
   if( !useSingleLev )
   {
-    std::vector< double > globalHistogram( NumBins, 0 );
-    std::vector< double > globalParameters( 5, 0 );
-    ComputeGlobalHistogram( medFiltImages, globalHistogram, valsPerBin );
-    computePoissonParams( globalHistogram, globalParameters, true );
-
     ComputeCosts( numThreads, medFiltImages, globalParameters, autoFlourCosts, flourCosts,
 #ifdef DEBUG_RESCALING_N_COST_EST
 			autoFlourCostsBG, flourCostsBG, valsPerBin, resacledImages );
@@ -2458,12 +2468,13 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 
   labelImage->Register();
   std::cout<<"Label Image read\n";*/
+
 #ifdef DEBUG_THREE_LEVEL_LABELING
-  std::cout<<"Cuts Done! Writing three level separation image\n"<<std::flush;
-  std::string labelImageName = nameTemplate + "label.tif";
-  WriteITKImage<UC3ImageType>( labelImage, labelImageName );
+  dividedLabels.at( numMeanders ) = labelImage;
+  labelImage->Register();
 #endif //DEBUG_THREE_LEVEL_LABELING
- //Debugging code to replace function ComputeMeanImages
+
+//Debugging code to replace function ComputeMeanImages
 /*std::vector< CostImageType::Pointer > avgImsVec;
   US2ImageType::Pointer BG_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_BGAvg.tif" );
   US2ImageType::Pointer AF_US = ReadITKImage<US2ImageType>( "/data/kedar/sim/ht/sim_AFAvg.tif" );
@@ -2602,10 +2613,29 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
   if( numColsForDiv )
   {
     std::cout<<"Combining images!\n"<<std::flush;
-    MergeAlternateScanRows( clonedImageFull, numColsForDiv, dividedOutputs );
-    dividedOutputs.at(0)->UnRegister(); dividedOutputs.at(1)->UnRegister();
-    dividedInputs.at(0)->UnRegister(); dividedInputs.at(1)->UnRegister();
+    MergeAlternateScanRows<US3ImageType>( clonedImageFull, numColsForDiv, dividedOutputs );
+    dividedOutputs.at(1)->UnRegister();
+    dividedInputs.at(1)->UnRegister();
   }
+
+#ifdef DEBUG_THREE_LEVEL_LABELING
+  UC3ImageType::Pointer labelImage;
+  if( numColsForDiv )
+  {
+    UC3ImageType::SizeType  sizeFull;
+    sizeFull[0] = numRow;
+    sizeFull[1] = numCol;
+    sizeFull[2] = numSlicesFull;
+    labelImage = CreateDefaultCoordsNAllocateSpace<UC3ImageType>( sizeFull );
+    MergeAlternateScanRows<UC3ImageType>( labelImage, numColsForDiv, dividedLabels );
+    dividedLabels.at(1)->UnRegister();
+  }
+  else labelImage = dividedLabels.at(0);
+  std::cout<<"Writing three level separation image\n"<<std::flush;
+  std::string labelImageName = nameTemplate + "label.tif";
+  WriteITKImage<UC3ImageType>( labelImage, labelImageName );
+  dividedLabels.at(0)->UnRegister(); dividedLabels.clear();
+#endif //DEBUG_THREE_LEVEL_LABELING
 
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
@@ -2613,6 +2643,8 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 
   WriteITKImage<US3ImageType>( clonedImageFull, correctedImageName );
 
+  dividedOutputs.at(0)->UnRegister();
+  dividedInputs.at(0)->UnRegister();
   dividedOutputs.clear(); dividedInputs.clear();  
 
   exit( EXIT_SUCCESS );
