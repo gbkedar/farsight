@@ -192,15 +192,9 @@ void RunTempNrrdFileWriter ( std::string inputFileName, int numThreads )
     std::cout<<i<<"\t";
 
     //Write slices to images
-#ifdef _OPENMP
-  #pragma omp parallel for num_threads(numThreads)
-#endif
     for( itk::IndexValueType j=0; j<numChannels; ++j )
     {
       TileImageType::Pointer currentTile;
-#ifdef _OPENMP
-      #pragma omp critical
-#endif
       currentTile = GetTile( currentSeries, j );
       OutputImageType::RegionType currentSliceRegion = outputPointers.at(j)->GetLargestPossibleRegion();
       currentSliceRegion.SetSize(2,1);
