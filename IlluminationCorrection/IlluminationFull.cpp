@@ -2130,11 +2130,17 @@ void DivideImageByScanDirection( US3ImageType::Pointer Input3dImage, int numCols
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > OutputIterType;
   typedef itk::ImageRegionConstIteratorWithIndex< US3ImageType  > InputIterConstType;
   itk::SizeValueType numSlicesFull = Input3dImage->GetLargestPossibleRegion().GetSize()[2];
-  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
   itk::SizeValueType numCol = Input3dImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = Input3dImage->GetLargestPossibleRegion().GetSize()[0];
-  US3ImageType::SizeType size; size[0] = numRow; size[1] = numCol; size[2] = numSlices;
+  US3ImageType::SizeType size; size[0] = numRow; size[1] = numCol;
+  if( (numSlicesFull/numColsForDiv)%2 )
+    size[2] = std::floor((((double)numSlicesFull)/((double)numColsForDiv))+0.5)
+		*numColsForDiv;
+  else size[2] = numSlicesFull/2;
   US3ImageType::Pointer dir1Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
+  if( (numSlicesFull/numColsForDiv)%2 )
+    size[2] = std::floor(((double)numSlicesFull)/((double)numColsForDiv))*numColsForDiv;
+  else size[2] = numSlicesFull/2;
   US3ImageType::Pointer dir2Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
   dividedOutputs.at(0) = dir1Im; dir1Im->Register();
   dividedOutputs.at(1) = dir2Im; dir2Im->Register();
@@ -2146,14 +2152,12 @@ void DivideImageByScanDirection( US3ImageType::Pointer Input3dImage, int numCols
   {
     for( unsigned j=i; j<(i+numColsForDiv); ++j )
     {
-      US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0; inpIndex[2]=i+j;
+      US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0; inpIndex[2]=j;
       US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0;
       if( first ) outIndex[2] = firstStackIndex++;
       else outIndex[2] = secondStackIndex++;
       US3ImageType::SizeType sliceSize;
       sliceSize[0] = numRow; sliceSize[1] = numCol; sliceSize[2] = 1;
-      if( first ) outIndex[2] = firstStackIndex++;
-      else outIndex[2] = secondStackIndex++;
       US3ImageType::RegionType regionInput, regionOutput;
       regionInput.SetSize( sliceSize ); regionInput.SetIndex( inpIndex );
       regionOutput.SetSize( sliceSize ); regionOutput.SetIndex( outIndex );
@@ -2184,7 +2188,6 @@ void MergeAlternateScanRows( US3ImageType::Pointer Output3dImage, int numColsFor
   typedef itk::ImageRegionIteratorWithIndex< US3ImageType  > OutputIterType;
   typedef itk::ImageRegionConstIteratorWithIndex< US3ImageType  > InputIterConstType;
   itk::SizeValueType numSlicesFull = Output3dImage->GetLargestPossibleRegion().GetSize()[2];
-  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
   itk::SizeValueType numCol = Output3dImage->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = Output3dImage->GetLargestPossibleRegion().GetSize()[0];
   bool first = true;
@@ -2198,7 +2201,7 @@ void MergeAlternateScanRows( US3ImageType::Pointer Output3dImage, int numColsFor
       US3ImageType::IndexType inpIndex; inpIndex[0]=0; inpIndex[1]=0;
       if( first ) inpIndex[2] = firstStackIndex++;
       else inpIndex[2] = secondStackIndex++;
-      US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0; outIndex[2]=i+j;
+      US3ImageType::IndexType outIndex; outIndex[0]=0; outIndex[1]=0; outIndex[2]=j;
       US3ImageType::SizeType sliceSize;
       sliceSize[0] = numRow; sliceSize[1] = numCol; sliceSize[2] = 1;
       US3ImageType::RegionType regionInput, regionOutput;
@@ -2260,7 +2263,6 @@ int main(int argc, char *argv[])
   std::cout<<"Using "<<numThreads<<" and "<<reducedThreads9<<" threads\n";
   US3ImageType::Pointer inputImageFull = ReadITKImageScifio<US3ImageType>( inputImageName );
   itk::SizeValueType numSlicesFull = inputImageFull->GetLargestPossibleRegion().GetSize()[2];
-  itk::SizeValueType numSlices = numColsForDiv ? numSlicesFull/2 : numSlicesFull;
   itk::SizeValueType numCol = inputImageFull->GetLargestPossibleRegion().GetSize()[1];
   itk::SizeValueType numRow = inputImageFull->GetLargestPossibleRegion().GetSize()[0];
 
@@ -2274,7 +2276,7 @@ int main(int argc, char *argv[])
   }
   catch( itk::ExceptionObject & excep )
   {
-    std::cerr << "Exception caught median filter!" << excep << std::endl;
+    std::cerr << "Exception caught duplicator filter!" << excep << std::endl;
     exit (EXIT_FAILURE);
   }
   US3ImageType::Pointer clonedImageFull = duplicator->GetModifiableOutput();
@@ -2299,6 +2301,8 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 {//Start scoping for for loop on scan dir division
   US3ImageType::Pointer inputImage = dividedInputs.at(numMeanders);
   US3ImageType::Pointer clonedImage = dividedOutputs.at(numMeanders);
+  itk::SizeValueType numSlices =
+	dividedInputs.at(numMeanders)->GetLargestPossibleRegion().GetSize()[2];
   std::vector< US2ImageType::Pointer  > medFiltImages;
   std::vector< CostImageType::Pointer > autoFlourCosts, flourCosts;
   std::vector< CostImageType::Pointer > autoFlourCostsBG, flourCostsBG;
@@ -2595,17 +2599,21 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 */
   }
 }//End scoping for for loop on scan dir division
-
-  MergeAlternateScanRows( clonedImageFull, numColsForDiv, dividedOutputs );
-  dividedOutputs.at(0)->UnRegister(); dividedOutputs.at(1)->UnRegister();
-  dividedInputs.at(0)->UnRegister(); dividedInputs.at(1)->UnRegister();
-  dividedOutputs.clear(); dividedInputs.clear();  
+  if( numColsForDiv )
+  {
+    std::cout<<"Combining images!\n"<<std::flush;
+    MergeAlternateScanRows( clonedImageFull, numColsForDiv, dividedOutputs );
+    dividedOutputs.at(0)->UnRegister(); dividedOutputs.at(1)->UnRegister();
+    dividedInputs.at(0)->UnRegister(); dividedInputs.at(1)->UnRegister();
+  }
 
   std::string correctedImageName = nameTemplate + "IlluminationCorrected.nrrd";
 
   std::cout<<"Writing corrected image! "<<correctedImageName<<"\n"<<std::flush;
 
   WriteITKImage<US3ImageType>( clonedImageFull, correctedImageName );
+
+  dividedOutputs.clear(); dividedInputs.clear();  
 
   exit( EXIT_SUCCESS );
 }
