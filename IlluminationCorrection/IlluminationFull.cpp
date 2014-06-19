@@ -1483,7 +1483,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   for( int i=0; i<numCoeffsPar; ++i )
   {
     double lambda1Cur = lambda1;
-    i1( task==1 ) lambda1Cur /= pow( 2, ((double)i) );
+    if( task==1 ) lambda1Cur /= pow( 2, ((double)i) );
     double lambda2Cur = lambda2;
     if( task==2 ) lambda2Cur /= pow( 2, ((double)i) );
     if( task==3 ) lambda2Cur = lambda2+spacing*i;
