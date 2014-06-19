@@ -98,7 +98,6 @@ std::string nameTemplate;
 std::string iterTemplate; 
 
 double lambda1start = 1;//Seed for lambda 1 in the elastic nets 
-double lambda2start = 1;//Seed for lambda 2 in the elastic nets 
 double L2THR = 1.0;	//Minimum L2 norm to be achieved 
 double L2MINTHR = 0.1;	//Min accuracy with which L2 condition in Regression should be satisfied
 itk::SizeValueType poissonCompsRepeated = 0;
@@ -804,19 +803,31 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
   for( ; !minIter.IsAtEnd(); ++minIter )
     meanMin += (double)minIter.Get()/size;
   meanMin = std::ceil( meanMin );
-
   US3ImageType::PixelType noiseThr = (US3ImageType::PixelType) thresholdVec.at(0);
+  bool thresholdForSmallSpecs = false;
+  bool thresholdForNoise      = false;
   if( noiseThr < lowNoiseThr ) //Don't do any noise thresholding
   {
-    noiseThr = itk::NumericTraits<US2ImageType::PixelType>::min();
     ConstIterType maxIter( maxIntProjFilt->GetOutput(),
 			   maxIntProjFilt->GetOutput()->GetLargestPossibleRegion() );
     maxIter.GoToBegin();
+    US3ImageType::PixelType maxPix = 0;
     for( ; !maxIter.IsAtEnd(); ++maxIter )
-      if( maxIter.Get()>noiseThr )
-        noiseThr = maxIter.Get();
+      if( maxIter.Get()>maxPix )
+        maxPix = maxIter.Get();
+    if( maxPix < (2*noiseThr) )
+      noiseThr = maxPix;
+    else
+    {
+      noiseThr = 2*noiseThr;
+      thresholdForSmallSpecs = true;
+    }
   }
-  else //Do thresholding
+  else
+    thresholdForNoise = true;
+
+  if( thresholdForNoise || thresholdForSmallSpecs )
+   //Do thresholding
 {
   std::cout<<"Noise threshold is: "<<noiseThr<<"\tAverage min is: "<<meanMin<<std::endl;
 
@@ -839,7 +850,8 @@ US3ImageType::PixelType SetSaturatedFGPixelsToMin( US3ImageType::Pointer InputIm
     for( ; !iter.IsAtEnd(); ++iter )
       if( iter.Get()>noiseThr )
       {
-        iter.Set( meanMin );
+        if(thresholdForNoise) iter.Set( meanMin );
+	else iter.Set( noiseThr );
 #ifdef NOISE_THR_DEBUG
 	++countCorrected;
 #endif
@@ -888,7 +900,7 @@ void ComputeCosts( int numThreads,
 #endif
   for( itk::IndexValueType i=0; i<numRow; i+=CWin )
   {
-    std::vector< double > parameters( globalParameters );
+    std::vector< double > parameters( globalParameters );//(5,0);
     US2ImageType::IndexType prevStart; prevStart[0] = 0; prevStart[1] = 0;
     for( itk::IndexValueType j=0; j<numCol; j+=CWin )
     {
@@ -1471,7 +1483,7 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   for( int i=0; i<numCoeffsPar; ++i )
   {
     double lambda1Cur = lambda1;
-    if( task==1 ) lambda1Cur /= pow( 2, ((double)i) );
+    i1( task==1 ) lambda1Cur /= pow( 2, ((double)i) );
     double lambda2Cur = lambda2;
     if( task==2 ) lambda2Cur /= pow( 2, ((double)i) );
     if( task==3 ) lambda2Cur = lambda2+spacing*i;
@@ -1685,7 +1697,6 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
   std::cout << "The output coefficients are: "; coeffs.t().print();
 #endif //DEBUG_ELASTIC_NETS
   lambda1start = pow( 2, ( std::ceil( std::log( lambda1 ) / std::log( 2 ) ) ) );
-  lambda2start = pow( 2, ( std::ceil( std::log( lambda1 ) / std::log( 2 ) ) ) );
   return;
 }
 
@@ -1819,7 +1830,7 @@ double RunRegression( DblVec X, DblVec Y, DblVec X2, DblVec Y2, DblVec XY, DblVe
 	++j;
     }
   }
-  Regresss( matX, matY, outCoeffs, numThreads, lambda1start, lambda2start, 1 );
+  Regresss( matX, matY, outCoeffs, numThreads, lambda1start, 1.0, 1 );
   return ImValsNorm;
 }
 
@@ -2132,12 +2143,12 @@ void DivideImageByScanDirection( US3ImageType::Pointer Input3dImage, int numCols
   itk::SizeValueType numRow = Input3dImage->GetLargestPossibleRegion().GetSize()[0];
   US3ImageType::SizeType size; size[0] = numRow; size[1] = numCol;
   if( (numSlicesFull/numColsForDiv)%2 )
-    size[2] = std::floor((((double)numSlicesFull)/((double)numColsForDiv))+0.5)
+    size[2] = std::floor((((double)numSlicesFull)/(2.0*(double)numColsForDiv))+0.5)
 		*numColsForDiv;
   else size[2] = numSlicesFull/2;
   US3ImageType::Pointer dir1Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
   if( (numSlicesFull/numColsForDiv)%2 )
-    size[2] = std::floor(((double)numSlicesFull)/((double)numColsForDiv))*numColsForDiv;
+    size[2] = std::floor(((double)numSlicesFull)/(2.0*(double)numColsForDiv))*numColsForDiv;
   else size[2] = numSlicesFull/2;
   US3ImageType::Pointer dir2Im = CreateDefaultCoordsNAllocateSpace<US3ImageType>( size );
   dividedOutputs.at(0) = dir1Im; dir1Im->Register();
@@ -2241,6 +2252,10 @@ int main(int argc, char *argv[])
   unsigned found = inputImageName.find_last_of(".");
   nameTemplate = inputImageName.substr(0,found) + "_";
   int numColsForDiv = atoi(argv[2]);
+  if( numColsForDiv )
+    std::cout<<"Number of tiles in each row for meander scan "<<numColsForDiv<<std::endl;
+  else
+    std::cout<<"Meander scan code not used\n";
   int numThreads = 24;
   int useSingleLev = 0;
   US3ImageType::PixelType lowNoiseThr = 0;
@@ -2298,6 +2313,12 @@ int main(int argc, char *argv[])
     ComputeGlobalHistogram( inputImageFull, globalHistogram, valsPerBin );
     computePoissonParams( globalHistogram, globalParameters, true );
   }
+  std::cout<< globalParameters.at(0) << " Lowest mean\t"
+	<< globalParameters.at(1) << " Intermediate mean\t"
+	<< globalParameters.at(2) << " Highest mean\t"
+	<< globalParameters.at(3) << " Prior for the lowest\t"
+	<< globalParameters.at(4) << " Prior for the intermediate\t"
+	<< valsPerBin << " vals per bin\n";
 
   std::cout<<"Number of slices:"<<numSlicesFull<<" Rows[0]:"<<numRow<<" Cols: "<<numCol<<"\n";
   std::vector< US3ImageType::Pointer  > dividedInputs;
@@ -2319,6 +2340,16 @@ int main(int argc, char *argv[])
   std::vector< UC3ImageType::Pointer  > dividedLabels;
   dividedLabels.resize( dividedInputs.size() );
 #endif //DEBUG_THREE_LEVEL_LABELING
+
+/*WriteITKImage<US3ImageType>( dividedInputs.at(0), im11nm );
+WriteITKImage<US3ImageType>( dividedOutputs.at(0), im12nm );
+if( numColsForDiv )
+{
+  std::string im21nm = nameTemplate + "image21.nrrd";
+  std::string im22nm = nameTemplate + "image22.nrrd";
+  WriteITKImage<US3ImageType>( dividedInputs.at(1), im21nm );
+  WriteITKImage<US3ImageType>( dividedOutputs.at(1), im22nm );
+}*/
 
 for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 {//Start scoping for for loop on scan dir division
@@ -2620,6 +2651,7 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 
 #ifdef DEBUG_THREE_LEVEL_LABELING
   UC3ImageType::Pointer labelImage;
+  std::cout<<"Working on debug label images..\n"<<std::flush;
   if( numColsForDiv )
   {
     UC3ImageType::SizeType  sizeFull;
@@ -2627,6 +2659,7 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
     sizeFull[1] = numCol;
     sizeFull[2] = numSlicesFull;
     labelImage = CreateDefaultCoordsNAllocateSpace<UC3ImageType>( sizeFull );
+  std::cout<<"Working on debug label images..\n"<<std::flush;
     MergeAlternateScanRows<UC3ImageType>( labelImage, numColsForDiv, dividedLabels );
     dividedLabels.at(1)->UnRegister();
   }
