@@ -15,17 +15,105 @@
 #include "itkCommand.h"
 #include "itkTIFFImageIO.h"
 
+#define DEBUG_SCALES 1
+
+template<typename InputImageType> void WriteITKImage
+  ( typename InputImageType::Pointer inputImagePointer,
+    std::string outputName )
+{
+  typedef  itk::TIFFImageIO TIFFIOType;
+  typedef typename itk::ImageFileWriter< InputImageType > WriterType;
+  typename WriterType::Pointer writer = WriterType::New();
+  TIFFIOType::Pointer tiffIO = TIFFIOType::New();
+  writer->SetFileName( outputName.c_str() );
+  writer->SetInput( inputImagePointer );
+  writer->SetImageIO( tiffIO );
+  try
+  {
+    writer->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  return;
+}
+
+template<typename InputImageType, typename OutputImageType> 
+  typename OutputImageType::Pointer CastImage
+    ( typename InputImageType::Pointer inputImage )
+{
+  typedef typename itk::CastImageFilter<InputImageType,
+  					OutputImageType> CastFilterType;
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"Error! This cast function needs equal input and output dimensions";
+  }
+  typename CastFilterType::Pointer cast = CastFilterType::New();
+  cast->SetInput( inputImage );
+  try
+  {
+    cast->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  return cast->GetOutput();
+}
+
+template<typename InputImageType, typename OutputImageType> void CastNWriteImage
+  ( typename InputImageType::Pointer inputImage,
+    std::string &outFileName )
+{
+  typedef typename itk::CastImageFilter<InputImageType,
+  					OutputImageType> CastFilterType;
+  if( InputImageType::ImageDimension!=OutputImageType::ImageDimension )
+  {
+    std::cout<<"This function needs equal input and output dimensions";
+    return;
+  }
+  typename OutputImageType::Pointer cast = 
+		CastImage< InputImageType, OutputImageType >( inputImage );
+  WriteITKImage< OutputImageType >( cast, outFileName );
+  return;
+}
+
+template<typename InputImageType> typename InputImageType::Pointer
+  ReadITKImage( std::string inputName )
+{
+  typedef  itk::TIFFImageIO TIFFIOType;
+  typedef typename itk::ImageFileReader< InputImageType > ReaderType;
+  typename ReaderType::Pointer reader = ReaderType::New();
+  TIFFIOType::Pointer tiffIO = TIFFIOType::New();
+  reader->SetFileName( inputName.c_str() );
+  reader->SetImageIO( tiffIO );
+  try
+  {
+    reader->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  typename InputImageType::Pointer inputImagePointer = reader->GetOutput();
+  return inputImagePointer;
+}
+
 const    unsigned int    Dimension = 2;
 typedef  float           PixelType;
+typedef  unsigned short  OutputPixelType;
 
 typedef itk::Image< PixelType, Dimension >  FloatImageType;
+typedef itk::Image< OutputPixelType, Dimension >  OutputImageType;
 typedef itk::CropImageFilter< FloatImageType, FloatImageType > CropImageFilterType;
-
-typedef  itk::TIFFImageIO TIFFIOType;
-
 typedef itk::ImageRegistrationMethod< FloatImageType, FloatImageType > RegistrationType;
 typedef RegistrationType::ParametersType ParametersType;
 typedef itk::TranslationTransform< double, Dimension > TranslationTransformType;
+typedef itk::ResampleImageFilter< FloatImageType, FloatImageType > ResampleFilterType;
 
 class TranslateCommandIterationUpdate : public itk::Command
 {
@@ -64,10 +152,36 @@ public:
   }
 };
 
-FloatImageType::Pointer ResampleImage( FloatImageType::Pointer inputImage, double scaleFactor )
+FloatImageType::Pointer ResampleByTranslating( FloatImageType::Pointer movingImage,
+	FloatImageType::Pointer fixedImage,
+	RegistrationType::Pointer outputTranslationRegistration )
+{
+  ResampleFilterType::Pointer resampler = ResampleFilterType::New();
+  resampler->SetInput( movingImage );
+  resampler->SetTransform( outputTranslationRegistration->GetOutput()->Get() );
+  resampler->SetSize( fixedImage->GetLargestPossibleRegion().GetSize() );
+  resampler->SetOutputOrigin(  fixedImage->GetOrigin() );
+  resampler->SetOutputSpacing( fixedImage->GetSpacing() );
+  resampler->SetOutputDirection( fixedImage->GetDirection() );
+  resampler->SetDefaultPixelValue( 100 );
+  try
+  {
+    resampler->Update();
+  }
+  catch( itk::ExceptionObject & err )
+  {
+    std::cerr << "ExceptionObject caught in translation resampler:\n";
+    std::cerr << err << std::endl;
+  }
+  FloatImageType::Pointer outputImage = resampler->GetOutput();
+  return outputImage;
+}
+
+
+FloatImageType::Pointer ResampleImageByScaling
+				( FloatImageType::Pointer inputImage, double scaleFactor )
 {
   typedef itk::RecursiveGaussianImageFilter< FloatImageType, FloatImageType > GaussianFilterType;
-  typedef itk::ResampleImageFilter< FloatImageType, FloatImageType > ResampleFilterType;
   typedef itk::IdentityTransform< double, 2 >  TransformType;
   typedef itk::LinearInterpolateImageFunction< FloatImageType, double > InterpolatorType;
 
@@ -146,8 +260,8 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     FloatImageType::Pointer resampledMoving;
     if( i )
     {
-      resampledFixed  = ResampleImage( fixedIm,  scaleFactorCurrentIter );
-      resampledMoving = ResampleImage( movingIm, scaleFactorCurrentIter );
+      resampledFixed  = ResampleImageByScaling( fixedIm,  scaleFactorCurrentIter );
+      resampledMoving = ResampleImageByScaling( movingIm, scaleFactorCurrentIter );
     }
     else
     {
@@ -196,6 +310,15 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
 	<< std::endl;
     if( !i )
        OutputTranslationRegistration = translationRegistration;
+#ifdef DEBUG_SCALES
+    std::stringstream ss;
+    ss << scaleFactorCurrentIter;
+    std::string fxNm = "fixedImScale" + ss.str() + ".tif";
+    std::string mvNm = "movingImScale" + ss.str() + ".tif";
+    FloatImageType::Pointer TransIm = ResampleByTranslating( movingIm, fixedIm, translationRegistration );
+    CastNWriteImage<FloatImageType,OutputImageType>(fixedIm,fxNm);
+    CastNWriteImage<FloatImageType,OutputImageType>(TransIm,mvNm);
+#endif //DEBUG_SCALES
   }
   return  OutputTranslationRegistration;
 }
@@ -210,129 +333,31 @@ int main( int argc, char *argv[] )
     std::cerr << "This executable registers File1 and then uses the transform on all subsequent files\n";
     return EXIT_FAILURE;
     }
-  typedef itk::ImageFileReader< FloatImageType  > FloatImageReaderType;
-  typedef itk::ImageFileReader< FloatImageType > FloatImageReaderType;
-  typedef itk::ResampleImageFilter< FloatImageType, FloatImageType > ResampleFilterType;
 
-  FloatImageReaderType::Pointer  fixedImageReader  = FloatImageReaderType::New();
-  TIFFIOType::Pointer tiffIO1 = TIFFIOType::New();
-  // tiffIO1->SetPixelType(itk::ImageIOBase::USHORT);
-  FloatImageReaderType::Pointer movingImageReader = FloatImageReaderType::New();
-  TIFFIOType::Pointer tiffIO2 = TIFFIOType::New();
-  // tiffIO2->SetPixelType(itk::ImageIOBase::USHORT);
+  std::string fixedImageName =  argv[1];
+  std::string movingImageName = argv[2];
 
-  fixedImageReader->SetFileName(  argv[1] );
-  fixedImageReader->SetImageIO(tiffIO1);
-  movingImageReader->SetFileName( argv[2] );
-  movingImageReader->SetImageIO(tiffIO2);
-
-  try
-  {
-    fixedImageReader->Update();
-    movingImageReader->Update();
-  }
-  catch( itk::ExceptionObject & err )
-  {
-    std::cerr << "ExceptionObject caught in image reader:\n";
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-  }
-  FloatImageType::Pointer fixedImage  = fixedImageReader->GetOutput();
-  FloatImageType::Pointer movingImage = movingImageReader->GetOutput();
+  FloatImageType::Pointer fixedImage  = ReadITKImage<FloatImageType>(fixedImageName);
+  FloatImageType::Pointer movingImage = ReadITKImage<FloatImageType>(movingImageName);
 
   RegistrationType::Pointer outputTranslationRegistration =
     ResampleAndRegisterWithTranslations( fixedImage, movingImage );
-  ResampleFilterType::Pointer resampler = ResampleFilterType::New();
-  resampler->SetInput( movingImageReader->GetOutput() );
-  resampler->SetTransform( outputTranslationRegistration->GetOutput()->Get() );
-  resampler->SetSize( fixedImage->GetLargestPossibleRegion().GetSize() );
-  resampler->SetOutputOrigin(  fixedImage->GetOrigin() );
-  resampler->SetOutputSpacing( fixedImage->GetSpacing() );
-  resampler->SetOutputDirection( fixedImage->GetDirection() );
-  resampler->SetDefaultPixelValue( 100 );
-  try
-  {
-    resampler->Update();
-  }
-  catch( itk::ExceptionObject & err )
-  {
-    std::cerr << "ExceptionObject caught in translation resampler:\n";
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-  }
+  FloatImageType::Pointer TranslatedImage = ResampleByTranslating( movingImage,
+		fixedImage, outputTranslationRegistration );
 
-  typedef  unsigned short  OutputPixelType;
-  typedef itk::Image< OutputPixelType, Dimension > OutputImageType;
-  typedef itk::CastImageFilter< FloatImageType, OutputImageType > CastFilterType;
-  typedef itk::ImageFileWriter< OutputImageType >  WriterType;
-
-  WriterType::Pointer      writer =  WriterType::New();
-  TIFFIOType::Pointer tiffIO3 = TIFFIOType::New();
-  // tiffIO3->SetPixelType(itk::ImageIOBase::USHORT);
-  CastFilterType::Pointer  caster =  CastFilterType::New();
-
-  std::string name = argv[2];
-  unsigned found = name.find_last_of(".");
-  name = name.substr(0,found) + "_" + "registered.tif";
-  writer->SetFileName( name.c_str() );
-
-  caster->SetInput( resampler->GetOutput() ); //finalResampler->GetOutput()
-  writer->SetInput( caster->GetOutput()   );
-  writer->SetImageIO( tiffIO3 );
-  writer->Update();
+  unsigned found = movingImageName.find_last_of(".");
+  std::string outputFilename = movingImageName.substr(0,found) + "_" + "registered.tif";
+  CastNWriteImage<FloatImageType,OutputImageType>(TranslatedImage,outputFilename);
 
   for( int i=3; i<argc; ++i )
   {
-    FloatImageReaderType::Pointer repeatMoveImageReader = FloatImageReaderType::New();
-    repeatMoveImageReader->SetFileName( argv[i] );
-	TIFFIOType::Pointer tiffIO4 = TIFFIOType::New();
-    // tiffIO4->SetPixelType(itk::ImageIOBase::USHORT);
-	repeatMoveImageReader->SetImageIO( tiffIO4 );
-    try
-    {
-    repeatMoveImageReader->Update();
-    }
-    catch( itk::ExceptionObject & err )
-    {
-    std::cerr << "ExceptionObject caught !" << std::endl;
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-    }
-
-    ResampleFilterType::Pointer repeatResampler = ResampleFilterType::New();
-    repeatResampler->SetTransform( outputTranslationRegistration->GetOutput()->Get() );
-    repeatResampler->SetInput( repeatMoveImageReader->GetOutput() );
-
-    repeatResampler->SetSize(    fixedImage->GetLargestPossibleRegion().GetSize() );
-    repeatResampler->SetOutputOrigin(  fixedImage->GetOrigin() );
-    repeatResampler->SetOutputSpacing( fixedImage->GetSpacing() );
-    repeatResampler->SetOutputDirection( fixedImage->GetDirection() );
-    repeatResampler->SetDefaultPixelValue( 100 );
-
-    WriterType::Pointer      repeatWriter =  WriterType::New();
-    CastFilterType::Pointer  repeatCaster =  CastFilterType::New();
-
-    std::string repeatName = argv[i];
-    unsigned found = repeatName.find_last_of(".");
-    repeatName = repeatName.substr(0,found) + "_" + "registered.tif";
-
-    repeatWriter->SetFileName( repeatName.c_str() );
-    repeatCaster->SetInput( repeatResampler->GetOutput() );
-    repeatWriter->SetInput( repeatCaster->GetOutput()   );
-    TIFFIOType::Pointer tiffIO5 = TIFFIOType::New();
-    // tiffIO5->SetPixelType(itk::ImageIOBase::USHORT);
-    repeatWriter->SetImageIO( tiffIO5 );
-
-    try
-    {
-      repeatWriter->Update();
-    }
-    catch( itk::ExceptionObject & err )
-    {
-      std::cerr << "ExceptionObject caught !" << std::endl;
-      std::cerr << err << std::endl;
-      return EXIT_FAILURE;
-    }
+    movingImageName = argv[i];
+    found = movingImageName.find_last_of(".");
+    outputFilename = movingImageName.substr(0,found) + "_" + "registered.tif";
+    FloatImageType::Pointer repeatMovingIm = ReadITKImage<FloatImageType>(movingImageName);
+    FloatImageType::Pointer repeatTranslatedImage = ResampleByTranslating( repeatMovingIm,
+		fixedImage, outputTranslationRegistration );
+    CastNWriteImage<FloatImageType,OutputImageType>(repeatTranslatedImage,outputFilename);
   }
   return EXIT_SUCCESS;
 }

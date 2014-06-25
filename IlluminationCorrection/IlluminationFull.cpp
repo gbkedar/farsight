@@ -1557,14 +1557,16 @@ void Regresss( arma::mat matX, arma::mat matY, std::vector<double> &outCoeffs, i
     {
       lambda2 *= pow( 2, ((double)(numCoeffsPar-2)) );
 #ifdef DEBUG_ELASTIC_NETS
-      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2<<"\n";
+      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2
+      	<<"and spacing of 2^-1\n";
 #endif //DEBUG_ELASTIC_NETS
       Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
     }
     else
     {
 #ifdef DEBUG_ELASTIC_NETS
-      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2<<"\n";
+      std::cout<<"Starting with L2 constraints at Lambda 2 ="<<lambda2
+      	<<"and spacing of 2^-1\n";
 #endif //DEBUG_ELASTIC_NETS
       Regresss( matX, matY, outCoeffs, numThreads, lambda1, lambda2, 2 );
     }
