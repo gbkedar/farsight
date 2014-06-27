@@ -55,6 +55,7 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkOtsuMultipleThresholdsCalculator.h"
 #include "itkImageDuplicator.h"
+#include "itkHistogramMatchingImageFilter.h"
 #include "itkSCIFIOImageIO.h"
 
 #include <mlpack/core.hpp>
@@ -2240,6 +2241,30 @@ template<typename InputImageType> void MergeAlternateScanRows(
   return;
 }
 
+template<typename InputImageType> typename InputImageType::Pointer  MatchHistograms(
+	typename InputImageType::Pointer InputImage,
+	typename InputImageType::Pointer ReferenceImage )
+{
+  typedef typename itk::HistogramMatchingImageFilter<InputImageType,InputImageType> HEFilterType;
+  typename HEFilterType::Pointer IntensityEqualizeFilter = HEFilterType::New();
+  IntensityEqualizeFilter->SetReferenceImage( ReferenceImage );
+  IntensityEqualizeFilter->SetInput( InputImage );
+  IntensityEqualizeFilter->SetNumberOfHistogramLevels( 1024 );
+  IntensityEqualizeFilter->SetNumberOfMatchPoints(100);
+  IntensityEqualizeFilter->ThresholdAtMeanIntensityOn();
+  try
+  {
+    IntensityEqualizeFilter->Update();
+  }
+  catch( itk::ExceptionObject & excep )
+  {
+    std::cerr << "Exception caught duplicator filter!" << excep << std::endl;
+    exit (EXIT_FAILURE);
+  }
+  typename InputImageType::Pointer outputPointer = IntensityEqualizeFilter->GetOutput();
+  return outputPointer;
+}
+
 int main(int argc, char *argv[])
 {
   if( argc < 3 )
@@ -2645,6 +2670,12 @@ for( unsigned numMeanders=0; numMeanders<dividedInputs.size(); ++numMeanders )
 }//End scoping for for loop on scan dir division
   if( numColsForDiv )
   {
+    std::cout<<"Matching histograms\n"<<std::flush;
+    US3ImageType::Pointer histEqImage = MatchHistograms<US3ImageType>( dividedOutputs.at(1),
+								dividedOutputs.at(0) );
+    dividedOutputs.at(1)->UnRegister();
+    histEqImage->Register();
+    dividedOutputs.at(1) = histEqImage;
     std::cout<<"Combining images!\n"<<std::flush;
     MergeAlternateScanRows<US3ImageType>( clonedImageFull, numColsForDiv, dividedOutputs );
     dividedOutputs.at(1)->UnRegister();
