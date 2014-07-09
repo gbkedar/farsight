@@ -1,9 +1,10 @@
 #include "itkTranslationTransform.h"
 #include "itkImageRegistrationMethod.h"
 #include "itkMeanSquaresImageToImageMetric.h"
-// #include "itkNormalizedCorrelationImageToImageMetric.h"
+#include "itkNormalizedCorrelationImageToImageMetric.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
 #include "itkCenteredTransformInitializer.h"
+#include "itkRegionOfInterestImageFilter.h"
 // #include "itkAffineTransform.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -102,6 +103,41 @@ template<typename InputImageType> typename InputImageType::Pointer
   typename InputImageType::Pointer inputImagePointer = reader->GetOutput();
   return inputImagePointer;
 }
+//Extracts the N percent of the image along the diagonal
+template<typename InputImageType > typename InputImageType::Pointer
+  ExtractCenterNPercentOfImage( typename InputImageType::Pointer inputImage,
+  double percentage )
+{
+  typedef typename itk::RegionOfInterestImageFilter
+  			< InputImageType, InputImageType > FilterType;
+  typename FilterType::Pointer filter = FilterType::New();
+  typename InputImageType::IndexType start;
+  typename InputImageType::SizeType size, inSize;
+  inSize = inputImage->GetLargestPossibleRegion().GetSize();
+  double diagonal = std::sqrt( (double)inSize[0]*(double)inSize[0]
+			      +(double)inSize[1]*(double)inSize[1] );
+  double angle = std::asin( (double)inSize[1]/diagonal );
+  diagonal *= (percentage/100.0);
+  size[0] = std::floor( std::cos(angle)*diagonal );
+  size[1] = std::floor( std::sin(angle)*diagonal );
+  start[0] = std::floor(((double)(inSize[0]-size[0]))/2.0);
+  start[1] = std::floor(((double)(inSize[1]-size[1]))/2.0);
+  typename InputImageType::RegionType desiredRegion;
+  desiredRegion.SetSize(size); desiredRegion.SetIndex(start);
+  filter->SetRegionOfInterest(desiredRegion);
+  filter->SetInput(inputImage);
+  try
+  {
+    filter->Update();
+  }
+  catch(itk::ExceptionObject &e)
+  {
+    std::cerr << e << std::endl;
+    exit( EXIT_FAILURE );
+  }
+  typename InputImageType::Pointer outputImagePointer = filter->GetOutput();
+  return outputImagePointer;
+}
 
 const    unsigned int    Dimension = 2;
 typedef  float           PixelType;
@@ -187,7 +223,7 @@ FloatImageType::Pointer ResampleImageByScaling
 
   GaussianFilterType::Pointer smoother = GaussianFilterType::New();
   smoother->SetInput( inputImage );
-  smoother->SetSigma( scaleFactor/2.0 );
+  smoother->SetSigma( ((double)inputImage->GetSpacing()[0])*scaleFactor/2.0 );
   smoother->SetNormalizeAcrossScale( true );
 
   ResampleFilterType::Pointer resampler = ResampleFilterType::New();
@@ -201,8 +237,8 @@ FloatImageType::Pointer ResampleImageByScaling
   resampler->SetDefaultPixelValue( 0 );
 
   FloatImageType::SpacingType spacing;
-  spacing[0] = inputImage->GetSpacing()[0];
-  spacing[1] = inputImage->GetSpacing()[1];
+  spacing[0] = inputImage->GetSpacing()[0]*scaleFactor;
+  spacing[1] = inputImage->GetSpacing()[1]*scaleFactor;
 
   resampler->SetOutputSpacing( spacing );
   resampler->SetOutputOrigin( inputImage->GetOrigin() );
@@ -234,7 +270,9 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
 {
 
   typedef itk::RegularStepGradientDescentOptimizer OptimizerType;
-  typedef itk::MeanSquaresImageToImageMetric< FloatImageType, FloatImageType > MetricType;
+  typedef itk::MeanSquaresImageToImageMetric< FloatImageType, FloatImageType > MSQMetricType;
+  typedef itk::NormalizedCorrelationImageToImageMetric< FloatImageType, FloatImageType >
+  									       NCRMetricType;
   typedef itk::LinearInterpolateImageFunction< FloatImageType, double > InterpolatorType;
 
   double largestDim = fixedIm->GetLargestPossibleRegion().GetSize()[0];
@@ -242,7 +280,7 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     largestDim = fixedIm->GetLargestPossibleRegion().GetSize()[1];
   
   double numIter = 0;
-  while( (largestDim/std::pow(10.0,numIter)) > 100.00 )
+  while( (largestDim/std::pow(10.0,numIter)) > 1000.00 )
      numIter++;
 
   TranslationTransformType::Pointer translationTransform = TranslationTransformType::New();
@@ -268,29 +306,50 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
       resampledFixed  = fixedIm;
       resampledMoving = movingIm;
     }
+
+#ifdef DEBUG_SCALES
+    if( i )
+    {
+      std::stringstream ss;
+      ss << scaleFactorCurrentIter;
+      std::string fxNm = "fixedImScale" + ss.str() + ".tif";
+      CastNWriteImage<FloatImageType,OutputImageType>(resampledFixed,fxNm);
+    }
+#endif //DEBUG_SCALES
+
     initialParameters[0] *= 10;
     initialParameters[1] *= 10;
     
-    MetricType::Pointer         translationMetric		= MetricType::New();
+    MSQMetricType::Pointer      translationMetricMSQ		= MSQMetricType::New();
+    NCRMetricType::Pointer      translationMetricNCR		= NCRMetricType::New();
     TranslationTransformType::Pointer translationTransform	= TranslationTransformType::New();
     OptimizerType::Pointer      translationOptimizer		= OptimizerType::New();
     InterpolatorType::Pointer   translationInterpolator		= InterpolatorType::New();
     RegistrationType::Pointer   translationRegistration		= RegistrationType::New();
-    translationRegistration->SetMetric(        translationMetric        );
+    if( 0 )
+      translationRegistration->SetMetric(        translationMetricNCR        );
+    else
+      translationRegistration->SetMetric(        translationMetricMSQ        );
     translationRegistration->SetOptimizer(     translationOptimizer     );
     translationRegistration->SetTransform(     translationTransform     );
     translationRegistration->SetInterpolator(  translationInterpolator  );
 
-    translationRegistration->SetFixedImage (    fixedIm    );
-    translationRegistration->SetMovingImage(   movingIm    );
+    translationRegistration->SetFixedImage (    resampledFixed    );
+    translationRegistration->SetMovingImage(   resampledMoving    );
 
+    double maxStepLength = 10.0;//*std::pow(10.0,numIter);
+    double minStepLength = 0.01/std::pow(10.0,numIter);
     translationRegistration->SetFixedImageRegion( fixedIm->GetBufferedRegion() );
     translationRegistration->SetInitialTransformParameters( initialParameters );
-    translationOptimizer->SetMaximumStepLength( 4.00 );
+    translationOptimizer->SetMaximumStepLength( maxStepLength );
     translationOptimizer->SetMinimumStepLength( 0.01 );
     translationOptimizer->SetNumberOfIterations( 200 );
     TranslateCommandIterationUpdate::Pointer translateObserver = TranslateCommandIterationUpdate::New();
     translationOptimizer->AddObserver( itk::IterationEvent(), translateObserver );
+
+    itk::SizeValueType threads = itk::MultiThreader::GetGlobalDefaultNumberOfThreads();
+    itk::MultiThreader::SetGlobalMaximumNumberOfThreads( 10 );
+
     try
     {
       translationRegistration->Update();
@@ -300,6 +359,9 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
       std::cerr << "ExceptionObject caught in registration:\n";
       std::cerr << err << std::endl;
     }
+
+    itk::MultiThreader::SetGlobalDefaultNumberOfThreads( threads );
+
     initialParameters = translationRegistration->GetLastTransformParameters();
     const double TranslationAlongX = initialParameters[0];
     const double TranslationAlongY = initialParameters[1];
@@ -311,13 +373,16 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     if( !i )
        OutputTranslationRegistration = translationRegistration;
 #ifdef DEBUG_SCALES
-    std::stringstream ss;
-    ss << scaleFactorCurrentIter;
-    std::string fxNm = "fixedImScale" + ss.str() + ".tif";
-    std::string mvNm = "movingImScale" + ss.str() + ".tif";
-    FloatImageType::Pointer TransIm = ResampleByTranslating( movingIm, fixedIm, translationRegistration );
-    CastNWriteImage<FloatImageType,OutputImageType>(fixedIm,fxNm);
-    CastNWriteImage<FloatImageType,OutputImageType>(TransIm,mvNm);
+    if( i )
+    {
+      std::stringstream ss;
+      ss << scaleFactorCurrentIter;
+      std::string mvNmTr = "movingImScaleTr" + ss.str() + ".tif";
+      std::string mvNm = "movingImScale" + ss.str() + ".tif";
+      FloatImageType::Pointer TransIm = ResampleByTranslating( resampledMoving, resampledFixed, translationRegistration );
+      CastNWriteImage<FloatImageType,OutputImageType>(TransIm,mvNmTr);
+      CastNWriteImage<FloatImageType,OutputImageType>(resampledMoving,mvNm);
+    }
 #endif //DEBUG_SCALES
   }
   return  OutputTranslationRegistration;
@@ -340,8 +405,12 @@ int main( int argc, char *argv[] )
   FloatImageType::Pointer fixedImage  = ReadITKImage<FloatImageType>(fixedImageName);
   FloatImageType::Pointer movingImage = ReadITKImage<FloatImageType>(movingImageName);
 
+  FloatImageType::Pointer fixedImageCrop = ExtractCenterNPercentOfImage<FloatImageType>
+  		( fixedImage, 22.0 );
+  FloatImageType::Pointer movingImageCrop = ExtractCenterNPercentOfImage<FloatImageType>
+  		( movingImage, 22.0 );
   RegistrationType::Pointer outputTranslationRegistration =
-    ResampleAndRegisterWithTranslations( fixedImage, movingImage );
+    ResampleAndRegisterWithTranslations( fixedImageCrop, movingImageCrop );
   FloatImageType::Pointer TranslatedImage = ResampleByTranslating( movingImage,
 		fixedImage, outputTranslationRegistration );
 
