@@ -5,7 +5,7 @@ SET( NrrdToDicom_SRCS NrrdToDicom.cpp )
 SET( Resample_SRCS ResampleForRegistration.cpp )
 SET( RescaleTo8Bit_SRCS RescaleTo8Bit.cpp )
 SET( RescaleTo16Bit_SRCS RescaleTo16Bit.cpp )
-SET( TranslateThenAffine_SRCS ImageRegistration.cxx ) 
+SET( TranslateThenAffine_SRCS ImageRegistration.cxx ) #MultiResImageRegistration1.cxx )# 
 
 INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/NuclearSegmentation/yousef_core/cell_binarization )
 
@@ -27,8 +27,8 @@ message("and arma libs ${ARMADILLO_LIBRARIES} with mlpack ${MLPack_LIBRARY}" )
 ADD_EXECUTABLE( Illumination ${Illumination_SRCS} )
 TARGET_LINK_LIBRARIES( Illumination ${MLPack_LIBRARY} ${ARMADILLO_LIBRARIES} ${Boost_LIBRARIES} ${LIBXML2_LIBRARIES} ${ITK_LIBRARIES} )
 
-#ADD_EXECUTABLE( ResampleImage ${Resample_SRCS} )
-#TARGET_LINK_LIBRARIES( ResampleImage ${ITK_LIBRARIES} )
+ADD_EXECUTABLE( ResampleImage ${Resample_SRCS} )
+TARGET_LINK_LIBRARIES( ResampleImage ${ITK_LIBRARIES} )
 
 #ADD_EXECUTABLE( RescaleTo8Bit ${RescaleTo8Bit_SRCS} )
 #TARGET_LINK_LIBRARIES( RescaleTo8Bit ${ITK_LIBRARIES} )

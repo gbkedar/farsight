@@ -1,5 +1,5 @@
 #include <iostream>
-
+#include <iomanip>
 #include "itkImage.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkCastImageFilter.h"
@@ -55,12 +55,20 @@ int main(int argc, char *argv[])
   }
 
   int largestDim = 2000;
+  bool writeScale = false;
   if( argc > 2 )
+  {
     largestDim = atoi( argv[2] );
+    if( largestDim == 1 )
+    {
+      writeScale = true;
+      largestDim = 2000;
+    }
+  }
 
   std::string inputImageName = argv[1]; //Name of the input image
   unsigned found = inputImageName.find_last_of(".");
-  std::string nameTemplate = inputImageName.substr(0,found) + "_";
+  std::string nameTemplate = inputImageName.substr(0,found) ;
   Ushort2DImageType::Pointer inputImage = ReadITKImage<Ushort2DImageType>( inputImageName );
 
   double scaleFactor = inputImage->GetLargestPossibleRegion().GetSize()[1] >
@@ -110,7 +118,7 @@ int main(int argc, char *argv[])
   rescale->SetOutputMaximum( itk::NumericTraits<Uchar2DImageType::PixelType>::max() );
   rescale->SetOutputMinimum( itk::NumericTraits<Uchar2DImageType::PixelType>::min() );
 
-  std::string opstring = nameTemplate + "subsample.tif";
+  std::string opstring = nameTemplate + "_subsample.tif";
   ImageFileWriterType::Pointer writer = ImageFileWriterType::New();
   writer->SetFileName( opstring.c_str() );
   writer->SetInput( rescale->GetOutput() );
@@ -125,5 +133,15 @@ int main(int argc, char *argv[])
       	<< excep << std::endl;
     return EXIT_FAILURE;
   }
+
+  if( writeScale )
+  {
+    std::ofstream myfile;
+    std::string opfile = nameTemplate + ".subsample";
+    myfile.open(opfile.c_str());
+    myfile << std::fixed << std::setprecision(8) << scaleFactor;
+    myfile.close();
+  }
+
   return EXIT_SUCCESS;
 }

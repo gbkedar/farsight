@@ -1,7 +1,7 @@
 #include "itkTranslationTransform.h"
 #include "itkImageRegistrationMethod.h"
 #include "itkMeanSquaresImageToImageMetric.h"
-#include "itkNormalizedCorrelationImageToImageMetric.h"
+//#include "itkNormalizedCorrelationImageToImageMetric.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
 #include "itkCenteredTransformInitializer.h"
 #include "itkRegionOfInterestImageFilter.h"
@@ -266,13 +266,14 @@ FloatImageType::Pointer ResampleImageByScaling
 }
 
 RegistrationType::Pointer ResampleAndRegisterWithTranslations
-			( FloatImageType::Pointer fixedIm, FloatImageType::Pointer movingIm )
+			( FloatImageType::Pointer fixedIm, FloatImageType::Pointer movingIm,
+			  double xTranslate, double yTranslate )
 {
 
   typedef itk::RegularStepGradientDescentOptimizer OptimizerType;
   typedef itk::MeanSquaresImageToImageMetric< FloatImageType, FloatImageType > MSQMetricType;
-  typedef itk::NormalizedCorrelationImageToImageMetric< FloatImageType, FloatImageType >
-  									       NCRMetricType;
+//  typedef itk::NormalizedCorrelationImageToImageMetric< FloatImageType, FloatImageType >
+//  									       NCRMetricType;
   typedef itk::LinearInterpolateImageFunction< FloatImageType, double > InterpolatorType;
 
   double largestDim = fixedIm->GetLargestPossibleRegion().GetSize()[0];
@@ -280,14 +281,14 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     largestDim = fixedIm->GetLargestPossibleRegion().GetSize()[1];
   
   double numIter = 0;
-  while( (largestDim/std::pow(10.0,numIter)) > 1000.00 )
-     numIter++;
+//  while( (largestDim/std::pow(10.0,numIter)) > 1000.00 )
+//     numIter++;
 
   TranslationTransformType::Pointer translationTransform = TranslationTransformType::New();
   RegistrationType::Pointer   OutputTranslationRegistration;
   ParametersType initialParameters( translationTransform->GetNumberOfParameters() );
-  initialParameters[0] = 0.0;  // Initial offset in mm along X
-  initialParameters[1] = 0.0;  // Initial offset in mm along Y
+  initialParameters[0] = xTranslate;  // Initial offset in mm along X
+  initialParameters[1] = yTranslate;  // Initial offset in mm along Y
 
   for( int i=numIter; i>-1; i-- )
   {
@@ -316,20 +317,27 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
       CastNWriteImage<FloatImageType,OutputImageType>(resampledFixed,fxNm);
     }
 #endif //DEBUG_SCALES
-
-    initialParameters[0] *= 10;
-    initialParameters[1] *= 10;
+    if( i!=numIter )
+    {
+      initialParameters[0] *= 10;
+      initialParameters[1] *= 10;
+    }
     
     MSQMetricType::Pointer      translationMetricMSQ		= MSQMetricType::New();
-    NCRMetricType::Pointer      translationMetricNCR		= NCRMetricType::New();
+//    NCRMetricType::Pointer      translationMetricNCR		= NCRMetricType::New();
     TranslationTransformType::Pointer translationTransform	= TranslationTransformType::New();
     OptimizerType::Pointer      translationOptimizer		= OptimizerType::New();
     InterpolatorType::Pointer   translationInterpolator		= InterpolatorType::New();
     RegistrationType::Pointer   translationRegistration		= RegistrationType::New();
-    if( 0 )
-      translationRegistration->SetMetric(        translationMetricNCR        );
-    else
+//    if( 0 )
+//    {
+//      translationMetricNCR->SubtractMeanOn();
+//      translationRegistration->SetMetric(        translationMetricNCR        );
+//    }
+//    else
+//    {
       translationRegistration->SetMetric(        translationMetricMSQ        );
+//    }
     translationRegistration->SetOptimizer(     translationOptimizer     );
     translationRegistration->SetTransform(     translationTransform     );
     translationRegistration->SetInterpolator(  translationInterpolator  );
@@ -337,8 +345,8 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     translationRegistration->SetFixedImage (    resampledFixed    );
     translationRegistration->SetMovingImage(   resampledMoving    );
 
-    double maxStepLength = 10.0;//*std::pow(10.0,numIter);
-    double minStepLength = 0.01/std::pow(10.0,numIter);
+    double maxStepLength = 1.0;//*std::pow(10.0,numIter);
+    double minStepLength = 0.001;//0.01/std::pow(10.0,numIter);
     translationRegistration->SetFixedImageRegion( fixedIm->GetBufferedRegion() );
     translationRegistration->SetInitialTransformParameters( initialParameters );
     translationOptimizer->SetMaximumStepLength( maxStepLength );
@@ -346,9 +354,6 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
     translationOptimizer->SetNumberOfIterations( 200 );
     TranslateCommandIterationUpdate::Pointer translateObserver = TranslateCommandIterationUpdate::New();
     translationOptimizer->AddObserver( itk::IterationEvent(), translateObserver );
-
-    itk::SizeValueType threads = itk::MultiThreader::GetGlobalDefaultNumberOfThreads();
-    itk::MultiThreader::SetGlobalMaximumNumberOfThreads( 10 );
 
     try
     {
@@ -359,8 +364,6 @@ RegistrationType::Pointer ResampleAndRegisterWithTranslations
       std::cerr << "ExceptionObject caught in registration:\n";
       std::cerr << err << std::endl;
     }
-
-    itk::MultiThreader::SetGlobalDefaultNumberOfThreads( threads );
 
     initialParameters = translationRegistration->GetLastTransformParameters();
     const double TranslationAlongX = initialParameters[0];
@@ -394,7 +397,8 @@ int main( int argc, char *argv[] )
     {
     std::cerr << "Missing Parameters " << std::endl;
     std::cerr << "Usage: " << argv[0];
-    std::cerr << "   fixedImageFile  movingImageFile1 [movingImageFile2] [movingImageFile3] ... [movingImageFileN]"<< std::endl;
+    std::cerr << "   fixedImageFile  movingImageFile1 [TranslationX] [TranslationY] [movingImageFile2] [movingImageFile3]";
+    std::cerr << "... [movingImageFileN]"<< std::endl;
     std::cerr << "This executable registers File1 and then uses the transform on all subsequent files\n";
     return EXIT_FAILURE;
     }
@@ -402,15 +406,22 @@ int main( int argc, char *argv[] )
   std::string fixedImageName =  argv[1];
   std::string movingImageName = argv[2];
 
+  double initialX = 0 , initialY = 0;
+
+  if( argc > 4 )
+  {
+    initialX = atof(argv[3]); initialY = atof(argv[4]);
+  }
+
   FloatImageType::Pointer fixedImage  = ReadITKImage<FloatImageType>(fixedImageName);
   FloatImageType::Pointer movingImage = ReadITKImage<FloatImageType>(movingImageName);
 
   FloatImageType::Pointer fixedImageCrop = ExtractCenterNPercentOfImage<FloatImageType>
-  		( fixedImage, 22.0 );
+  		( fixedImage, 60.0 );
   FloatImageType::Pointer movingImageCrop = ExtractCenterNPercentOfImage<FloatImageType>
-  		( movingImage, 22.0 );
+  		( movingImage, 60.0 );
   RegistrationType::Pointer outputTranslationRegistration =
-    ResampleAndRegisterWithTranslations( fixedImageCrop, movingImageCrop );
+    ResampleAndRegisterWithTranslations( fixedImageCrop, movingImageCrop, initialX, initialY );
   FloatImageType::Pointer TranslatedImage = ResampleByTranslating( movingImage,
 		fixedImage, outputTranslationRegistration );
 
@@ -418,7 +429,7 @@ int main( int argc, char *argv[] )
   std::string outputFilename = movingImageName.substr(0,found) + "_" + "registered.tif";
   CastNWriteImage<FloatImageType,OutputImageType>(TranslatedImage,outputFilename);
 
-  for( int i=3; i<argc; ++i )
+  for( int i=5; i<argc; ++i )
   {
     movingImageName = argv[i];
     found = movingImageName.find_last_of(".");
