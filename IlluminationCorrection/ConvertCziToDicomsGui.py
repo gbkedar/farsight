@@ -1,13 +1,17 @@
 import os, sys, glob, stat, getopt, platform, subprocess, multiprocessing, fnmatch
-import Tkinter, Tkconstants, tkFileDialog
+import Tkinter, Tkconstants, tkFileDialog, time
 
-cziStr = '.czi'
-cziFilterStr = '*.czi'
+cziStr          = '.czi'
+cziFilterStr    = '*.czi'
+xformFileStr    = '*.xform'
 brightFieldStr0 = '_C0.nrrd'
+Channel1Str     = '_C1.nrrd'
+Channel3Str     = '_C3.nrrd'
+GdbIcpExec      = 'D:/fiji/gdbicp.exe'
+FijiExec        = 'D:/fiji/ImageJ-win64.exe'
 
 class TkFileDialog(Tkinter.Frame):
   def __init__(self, root):
-
     pform = platform.system()
     self.execExt = ''
     self.execPref = ''
@@ -16,8 +20,8 @@ class TkFileDialog(Tkinter.Frame):
     else:
       self.execPref = './'
     numCores = multiprocessing.cpu_count()
-    if numCores>14:
-      numCores = 14
+    if numCores>10:
+      numCores = 10
     self.numCoresToUse = str(int( round(numCores*0.9,0) ));
     self.stdstrring = ''
     self.stdsterr   = ''
@@ -70,6 +74,7 @@ class TkFileDialog(Tkinter.Frame):
     self.shadecorrectnregisterloop(dirs)
 
   def shadecorrectnregisterloop(self,files):
+#    time.sleep(600)
     for filename in files:
       print filename
 #      self.WriteNrrdTilesFromCziNShadeCorrect(filename)
@@ -94,6 +99,7 @@ class TkFileDialog(Tkinter.Frame):
           f2.write( self.stdsterr )
           f2.close()
         else:
+          registerFiles = []
           for root, dirs, czifiles in os.walk(filename):
             for filenameczi in fnmatch.filter(czifiles, cziFilterStr):
               prcFilename = os.path.join(root,filenameczi)
@@ -108,7 +114,130 @@ class TkFileDialog(Tkinter.Frame):
               f2.close()
               self.stdstrring = ''
               self.stdsterr   = ''
-    print ('I am done. Close the window.')
+              registerFiles.append( prcFilename )
+          #Do registration
+          while len(registerFiles):
+            #Take the first file get path
+            currentPath = os.path.dirname(registerFiles[0])
+            #Find all files with the same path
+            currentRegList  = []
+            deleteIndexList = []
+            currentRegList.append( registerFiles[0] )
+            for i in range( 1, len(registerFiles) ):
+              if registerFiles[i].find(currentPath)!=-1:
+                deleteIndexList.append( i )
+                currentRegList.append( registerFiles[i] )
+            #Delete the files that will be registered from the master list
+            currentRegList.sort()
+            deleteIndexList.append(0)
+            deleteIndexList.sort()
+            deleteIndexList.reverse()
+            for i in range( 0, len(deleteIndexList) ):
+              del registerFiles[deleteIndexList[i]]
+
+            #Find C0 tiff from the first round of staining
+            searchPattern = os.path.splitext(os.path.basename(currentRegList[0]))[0]
+            brightFeildString = 'C0_IlluminationCorrected_stitched.tif'
+            brightFeildFound1 = 0
+            brightFeildChannel1 = ''
+            currentSubPath = os.path.dirname(currentRegList[0])
+            for fileName in os.listdir(currentSubPath):
+              if os.path.basename(fileName).find(searchPattern)!=-1:
+                if os.path.basename(fileName).find(brightFeildString)!=-1:
+                  brightFeildChannel1 = currentSubPath + '/' + fileName
+                  brightFeildFound1   = 1
+            if brightFeildFound1:
+              self.downsampleAndRunAutoContrastInImageJ( brightFeildChannel1, 0 )
+              subsampleFilename1 = os.path.splitext(brightFeildChannel1)[0]+'_subsample.tif'
+              for i in range( 1, len(currentRegList) ):
+                #Find bright feild in subsequent rounds
+                searchPattern = os.path.splitext(os.path.basename(currentRegList[i]))[0]
+                brightFeildChannel2 = ''
+                round2FlourChannels = []
+                brightFeildFound2   = 0
+                for fileName in os.listdir(currentSubPath):
+                  if os.path.basename(fileName).find(searchPattern)!=-1:
+                    if os.path.basename(fileName).find(brightFeildString)!=-1:
+                      brightFeildChannel2 = currentSubPath + '/' + fileName
+                      brightFeildFound2   = 1
+                    else:
+                      if os.path.splitext(fileName)[1].find('tif')!=-1:
+                        fullPathToFile = currentSubPath + '/' + fileName
+                        round2FlourChannels.append( fullPathToFile )
+                if brightFeildFound2:
+                  #Start by downsampling images
+                  self.downsampleAndRunAutoContrastInImageJ( brightFeildChannel2, 1 )
+                  subsampleScaleFile = os.path.splitext(brightFeildChannel2)[0]+'.subsample'
+                  f = open(subsampleScaleFile, 'r')
+                  subsampleScaling = float(f.read())
+                  f.close()
+                  os.remove( subsampleScaleFile )
+                  subsampleFilename2 = os.path.splitext(brightFeildChannel2)[0]+'_subsample.tif'
+                  #Run gdbicp
+                  args = [GdbIcpExec, subsampleFilename1, subsampleFilename2, '-model', '0', '-no_render', '1']
+                  currentDir = os.getcwd()
+                  os.chdir(os.path.dirname(subsampleFilename2))
+                  self.RunExec( args, subsampleFilename2 )
+                  os.chdir(currentDir)
+                  os.remove( subsampleFilename2 )
+                  for fileName in os.listdir(currentSubPath):
+                    if os.path.splitext(fileName)[1].find('xform')!=-1:
+                      if os.path.basename(fileName).find(os.path.basename(os.path.splitext(subsampleFilename1)[0]))!=-1:
+                        if os.path.basename(fileName).find(os.path.basename(os.path.splitext(subsampleFilename2)[0]))!=-1:
+                          xformFile = currentSubPath + '/' + fileName
+                          f = open(xformFile, 'r')
+                          counter1 = 0
+                          for line in f.readlines():
+                            if line.find('AFFINE')!=-1 or counter1:
+                              if line.find('AFFINE')!=-1:
+                                f.close()
+                              counter1 = counter1 + 1
+                            if counter1==5:
+                              stringArray = line.split()
+                              xTranslate = -1*subsampleScaling*(float(stringArray[2])-float(stringArray[0]))
+                              yTranslate = -1*subsampleScaling*(float(stringArray[3])-float(stringArray[1])) #Origin in ITK
+                          if counter1<5:
+                            print( 'Bad GDBICP file and skipping following file:' )
+                            print currentRegList[i]
+                          os.remove( xformFile )
+                          TranslateExe = 'TranslateThenAffineRegister'+self.execExt
+                          args = [ TranslateExe, brightFeildChannel1, brightFeildChannel2, str(xTranslate), str(yTranslate) ];
+                          args.extend( round2FlourChannels );
+                          self.RunExec( args, brightFeildChannel2 )
+                          os.remove( brightFeildChannel2 )
+##                          for removeName in round2FlourChannels:
+##                            os.remove( removeName )
+                else:
+                  print( 'Failed to find the registration brightfield and skipping following file:' )
+                  print currentRegList[i]
+              os.remove( subsampleFilename1 )
+            else:
+              print( 'Failed to find the registration brightfield and skipping following files:' )
+              print currentRegList
+    print('I am done processing. Close the window.')
+
+  #Run autocontras fiji/imagej macro
+  def downsampleAndRunAutoContrastInImageJ( self, filename, writeScalingFlag ):
+    ResampleExe = 'ResampleImage'+self.execExt
+    if writeScalingFlag:
+      args = [ ResampleExe, filename, '1' ]
+    else:
+      args = [ ResampleExe, filename ]
+    self.RunExec( args, filename )
+    subsampleFilename = os.path.splitext(filename)[0]+'_subsample.tif'
+    ijFile = os.path.splitext(os.path.basename(filename))[0]+'.ijm'
+    ijmacroFile =  os.path.dirname(FijiExec)+'/macros/'+ijFile #Fiji is defaulting to FIJI_EXE_PATH/macros/
+    f = open(ijmacroFile, 'w')
+    f.write('open("')
+    subsampleFilenameIJ = subsampleFilename.replace('/', '\\\\')
+    f.write(subsampleFilenameIJ)
+    f.write('");')
+    f.write('\nrun("Enhance Contrast", "saturated=0.35 normalize");\nrun("Save");\nclose();')
+    f.close()
+    #Run imagej/fiji to enhance contrast
+    args = [FijiExec,'--headless','-macro',ijFile] #Fiji is defaulting to FIJI_EXE_PATH/macros/
+    self.RunExec( args, ijmacroFile )
+    os.remove( ijmacroFile )
 
   def register( self ):
     #files = self.askopenfilename()
@@ -136,13 +265,18 @@ class TkFileDialog(Tkinter.Frame):
     dicomConverter = self.execPref+'NrrdToDicom'+self.execExt
     filesThatExistPost = glob.glob(searchStr)
     for nrrdFile in filesThatExistPost:
-      if nrrdFile.find(brightFieldStr0)!=-1:
-        args = [ IlluminationEx, nrrdFile, self.numCoresToUse, '1' ]
+      if nrrdFile.find(brightFieldStr0)!= -1:
+        args = [ IlluminationEx, nrrdFile, '0', self.numCoresToUse, '1' ]
       else:
-        args = [ IlluminationEx, nrrdFile, self.numCoresToUse ]
+        if nrrdFile.find(Channel1Str) != -1 or nrrdFile.find(Channel3Str) != -1:
+          args = [ IlluminationEx, nrrdFile, '38', self.numCoresToUse ] #Change 21
+        else:
+          args = [ IlluminationEx, nrrdFile, '0', self.numCoresToUse ]
       args1 = [ dicomConverter, nrrdFile, os.path.splitext(filename)[0]+'.xml', self.numCoresToUse ]
-      self.RunExec( args1, nrrdFile ) #stitches raw uncorrected images
-#      self.RunExec( args, nrrdFile )
+#      if nrrdFile.find(brightFieldStr0)!=-1:
+#        self.RunExec( args1, nrrdFile ) #stitches raw uncorrected images
+#      if nrrdFile.find(Channel3Str)!=-1 or nrrdFile.find(Channel1Str)!=-1:#nrrdFile.find(brightFieldStr0)!=-1 and 
+      self.RunExec( args, nrrdFile )
       nrrdIllFile = os.path.splitext(nrrdFile)[0]+'_IlluminationCorrected.nrrd'
       if os.path.exists(nrrdIllFile):
         os.remove( nrrdFile )
@@ -158,7 +292,7 @@ class TkFileDialog(Tkinter.Frame):
   def RunBioformatsMetaReader( self, filename ):
     xmlFilename = os.path.splitext(filename)[0]+'.xml'
     errFilename = os.path.splitext(filename)[0]+'.errlog'
-    javaExec = 'C:\\Program Files\\Java\\jre7\\bin\\java.exe' #'java'+self.execExt
+    javaExec = 'C:\\Program Files\\Java\\jre8\\bin\\java.exe' #'java'+self.execExt
     args = [ javaExec , '-mx512m', '-cp', 'loci_tools.jar', 'loci.formats.tools.ImageInfo',
              '-nopix', '-omexml-only', filename ]
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -172,8 +306,8 @@ class TkFileDialog(Tkinter.Frame):
     f0.close()'''
 
   def RunExec( self, args, filename ):
-    errFilename = os.path.splitext(filename)[0]+'.errlog'
-    logFilename = os.path.splitext(filename)[0]+'.log'
+    '''errFilename = os.path.splitext(filename)[0]+'.errlog'
+    logFilename = os.path.splitext(filename)[0]+'.log' '''
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
     self.stdstrring += stdout
