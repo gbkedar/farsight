@@ -6,6 +6,7 @@ SET( Resample_SRCS ResampleForRegistration.cpp )
 SET( RescaleTo8Bit_SRCS RescaleTo8Bit.cpp )
 SET( RescaleTo16Bit_SRCS RescaleTo16Bit.cpp )
 SET( TranslateThenAffine_SRCS ImageRegistration.cxx ) 
+SET( CropForReg_SRCS CropCenterForReg.cxx ) 
 
 INCLUDE_DIRECTORIES( ${Farsight_SOURCE_DIR}/NuclearSegmentation/yousef_core/cell_binarization )
 
@@ -35,6 +36,9 @@ TARGET_LINK_LIBRARIES( Illumination ${MLPack_LIBRARY} ${ARMADILLO_LIBRARIES} ${B
 
 #ADD_EXECUTABLE( RescaleTo16Bit ${RescaleTo16Bit_SRCS} )
 #TARGET_LINK_LIBRARIES( RescaleTo16Bit ${ITK_LIBRARIES} )
+
+ADD_EXECUTABLE( CropForReg ${CropForReg_SRCS} )
+TARGET_LINK_LIBRARIES( CropForReg ${ITK_LIBRARIES} )
 
 ADD_EXECUTABLE( TranslateThenAffineRegister ${TranslateThenAffine_SRCS} )
 TARGET_LINK_LIBRARIES( TranslateThenAffineRegister ${ITK_LIBRARIES} )
